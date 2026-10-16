@@ -15,6 +15,8 @@ using System.Web;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
+using System.Windows.Interop;
+using System.Windows.Media;
 
 namespace gVPN
 {
@@ -59,12 +61,16 @@ namespace gVPN
         private const int INTERNET_OPTION_SETTINGS_CHANGED = 39;
         private const int INTERNET_OPTION_REFRESH = 37;
 
+        [DllImport("kernel32.dll")]
+        private static extern bool SetProcessWorkingSetSize(IntPtr proc, int min, int max);
+
         public MainWindow()
         {
             InitializeComponent();
             EnsureCoreExtracted();
             LoadProfiles();
             LstServers.ItemsSource = _profiles;
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
             if (_profiles.Count > 0)
                 LstServers.SelectedIndex = 0;
 
@@ -73,6 +79,19 @@ namespace gVPN
                 Interval = TimeSpan.FromSeconds(1)
             };
             _speedTimer.Tick += SpeedTimer_Tick;
+
+            // Сброс памяти сразу после полной отрисовки окна
+            this.Loaded += (s, e) => TrimMemory();
+        }
+
+        private static void TrimMemory()
+        {
+            GC.Collect(2, GCCollectionMode.Forced, true, true);
+            GC.WaitForPendingFinalizers();
+            if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, -1, -1);
+            }
         }
 
         private void EnsureCoreExtracted()

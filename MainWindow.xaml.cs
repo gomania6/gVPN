@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.NetworkInformation;
@@ -14,12 +15,13 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Web;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Forms;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
+using Microsoft.Win32;
 
-// Разрешение конфликтов имен между WPF и WinForms
 using Application = System.Windows.Application;
 using ContextMenu = System.Windows.Controls.ContextMenu;
 using MenuItem = System.Windows.Controls.MenuItem;
@@ -31,40 +33,49 @@ namespace gVPN
     {
         public string Id { get; set; } = Guid.NewGuid().ToString();
         public string Name { get; set; } = "Новый сервер";
-        public string Type { get; set; } = "vless"; // "vless" или "wireguard"
+        public string Type { get; set; } = "vless";
         public string RawData { get; set; } = "";
+    }
+
+    public class AppSettings
+    {
+        public string Language { get; set; } = "ru"; // ru, en, pl
+        public bool AutoStartApp { get; set; } = false;
+        public bool AutoStartConnect { get; set; } = false;
+        public bool StartMinimized { get; set; } = false;
+        public string? LastSelectedProfileId { get; set; }
     }
 
     [SupportedOSPlatform("windows")]
     public partial class MainWindow : Window
     {
-        // ================= ПУТИ К ДАННЫМ В APPDATA =================
         private static readonly string AppDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "gVPN");
         private readonly string _storagePath = Path.Combine(AppDataFolder, "servers.json");
+        private readonly string _settingsPath = Path.Combine(AppDataFolder, "settings.json");
         private readonly string _coreDir = Path.Combine(AppDataFolder, "Core");
 
-        // ================= СОСТОЯНИЕ VPN =================
         private ObservableCollection<VpnProfile> _profiles = new();
+        private AppSettings _settings = new();
         private bool _isConnected = false;
         private Process? _xrayProcess;
         private VpnProfile? _activeProfile;
+        private bool _isLoadingSettings = false;
 
-        // ================= МОНИТОРИНГ СКОРОСТИ =================
         private readonly DispatcherTimer _speedTimer;
         private NetworkInterface[]? _cachedInterfaces;
         private long _lastBytesReceived = 0;
         private long _lastBytesSent = 0;
 
-        // ================= СИСТЕМНЫЙ ТРЕЙ =================
         private NotifyIcon? _notifyIcon;
         private bool _isRealExit = false;
         private ContextMenu? _trayMenu;
         private MenuItem? _trayStatusItem;
         private MenuItem? _traySpeedItem;
         private MenuItem? _trayConnectItem;
+        private MenuItem? _trayShowItem;
+        private MenuItem? _trayExitItem;
 
-        // ================= HTTP И СЕТЬ =================
         private static readonly HttpClient SharedHttpClient = new(new HttpClientHandler
         {
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
@@ -85,17 +96,33 @@ namespace gVPN
 
         public MainWindow()
         {
-            // Отключение аппаратного ускорения WPF для существенной экономии ОЗУ
+            // Фикс рабочей директории при автозапуске Windows
+            string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);
+            if (!string.IsNullOrEmpty(exeDir))
+            {
+                Directory.SetCurrentDirectory(exeDir);
+            }
+
             RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
 
             InitializeComponent();
             EnsureCoreExtracted();
             SetupTrayIcon();
             LoadProfiles();
+            LoadSettings();
 
             LstServers.ItemsSource = _profiles;
-            if (_profiles.Count > 0)
+
+            if (!string.IsNullOrEmpty(_settings.LastSelectedProfileId))
+            {
+                var saved = _profiles.FirstOrDefault(p => p.Id == _settings.LastSelectedProfileId);
+                if (saved != null) LstServers.SelectedItem = saved;
+                else if (_profiles.Count > 0) LstServers.SelectedIndex = 0;
+            }
+            else if (_profiles.Count > 0)
+            {
                 LstServers.SelectedIndex = 0;
+            }
 
             _speedTimer = new DispatcherTimer(DispatcherPriority.Background)
             {
@@ -103,10 +130,232 @@ namespace gVPN
             };
             _speedTimer.Tick += SpeedTimer_Tick;
 
-            this.Loaded += (s, e) => TrimMemory();
+            this.Loaded += MainWindow_Loaded;
         }
 
-        // ================= РАБОТА С ПАМЯТЬЮ =================
+        private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+        {
+            TrimMemory();
+
+            // Проверка запуска с аргументом фонового старта или флагом настроек
+            string[] args = Environment.GetCommandLineArgs();
+            bool hasAutoStartFlag = args.Any(a => a.Equals("--autostart", StringComparison.OrdinalIgnoreCase));
+
+            if (_settings.StartMinimized || hasAutoStartFlag)
+            {
+                this.Hide();
+            }
+
+            if (_settings.AutoStartConnect && LstServers.SelectedItem != null)
+            {
+                await Task.Delay(800);
+                BtnConnect_Click(BtnConnect, new RoutedEventArgs());
+            }
+        }
+
+        // ================= ЛОКАЛИЗАЦИЯ (МУЛЬТИЯЗЫЧНОСТЬ) =================
+
+        private void ApplyLocalization(string lang)
+        {
+            switch (lang)
+            {
+                case "en":
+                    LblAvailableServers.Text = "Available Servers";
+                    BtnToggleAddPanel.Content = PnlAddServer.Visibility == Visibility.Visible ? "Hide Form" : "+ Add";
+                    LblAddHint.Text = "Paste vless://, subscription URL, or WG config:";
+                    BtnAdd.Content = "Save Connection";
+                    BtnConnect.Content = _isConnected ? "Disconnect" : "Connect";
+                    TxtStatus.Text = _isConnected ? $"Connected: {_activeProfile?.Name}" : "Status: Disconnected";
+                    LblGeneralSettings.Text = "General Settings";
+                    LblLanguage.Text = "Interface Language";
+                    ChkAutoStartApp.Content = "Start gVPN with Windows";
+                    ChkAutoStartConnect.Content = "Automatically connect selected server";
+                    ChkStartMinimized.Content = "Start minimized to system tray";
+                    BtnBackToServers.Content = "← Back to Servers";
+                    if (_trayStatusItem != null) _trayStatusItem.Header = _isConnected ? $"Connected: {_activeProfile?.Name}" : "gVPN: Disconnected";
+                    if (_trayConnectItem != null) _trayConnectItem.Header = _isConnected ? "Disconnect" : "Connect";
+                    if (_trayShowItem != null) _trayShowItem.Header = "Open Window";
+                    if (_trayExitItem != null) _trayExitItem.Header = "Exit gVPN";
+                    break;
+
+                case "pl":
+                    LblAvailableServers.Text = "Dostępne serwery";
+                    BtnToggleAddPanel.Content = PnlAddServer.Visibility == Visibility.Visible ? "Ukryj" : "+ Dodaj";
+                    LblAddHint.Text = "Wklej link vless://, subskrypcję lub plik .conf WireGuard:";
+                    BtnAdd.Content = "Zapisz połączenie";
+                    BtnConnect.Content = _isConnected ? "Rozłącz" : "Połącz";
+                    TxtStatus.Text = _isConnected ? $"Połączono: {_activeProfile?.Name}" : "Status: Rozłączono";
+                    LblGeneralSettings.Text = "Ustawienia ogólne";
+                    LblLanguage.Text = "Język interfejsu";
+                    ChkAutoStartApp.Content = "Uruchom gVPN wraz z systemem Windows";
+                    ChkAutoStartConnect.Content = "Automatycznie połącz wybrany serwer";
+                    ChkStartMinimized.Content = "Uruchom zminimalizowany w zasobniku";
+                    BtnBackToServers.Content = "← Wróć do serwerów";
+                    if (_trayStatusItem != null) _trayStatusItem.Header = _isConnected ? $"Połączono: {_activeProfile?.Name}" : "gVPN: Rozłączono";
+                    if (_trayConnectItem != null) _trayConnectItem.Header = _isConnected ? "Rozłącz" : "Połącz";
+                    if (_trayShowItem != null) _trayShowItem.Header = "Otwórz okno";
+                    if (_trayExitItem != null) _trayExitItem.Header = "Zamknij gVPN";
+                    break;
+
+                default: // ru
+                    LblAvailableServers.Text = "Доступные серверы";
+                    BtnToggleAddPanel.Content = PnlAddServer.Visibility == Visibility.Visible ? "Скрыть форму" : "+ Добавить";
+                    LblAddHint.Text = "Вставьте vless://, URL подписки или WG конфиг:";
+                    BtnAdd.Content = "Сохранить подключение";
+                    BtnConnect.Content = _isConnected ? "Отключиться" : "Подключиться";
+                    TxtStatus.Text = _isConnected ? $"Подключено: {_activeProfile?.Name}" : "Статус: Отключено";
+                    LblGeneralSettings.Text = "Общие параметры";
+                    LblLanguage.Text = "Язык интерфейса";
+                    ChkAutoStartApp.Content = "Запускать gVPN вместе с Windows";
+                    ChkAutoStartConnect.Content = "Автоматически подключать выбранный сервер";
+                    ChkStartMinimized.Content = "Запускать свернутым в системный трей";
+                    BtnBackToServers.Content = "← Назад к серверам";
+                    if (_trayStatusItem != null) _trayStatusItem.Header = _isConnected ? $"Подключено: {_activeProfile?.Name}" : "gVPN: Отключено";
+                    if (_trayConnectItem != null) _trayConnectItem.Header = _isConnected ? "Отключиться" : "Подключиться";
+                    if (_trayShowItem != null) _trayShowItem.Header = "Открыть окно";
+                    if (_trayExitItem != null) _trayExitItem.Header = "Выйти из gVPN";
+                    break;
+            }
+        }
+
+        private void CmbLanguage_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isLoadingSettings) return;
+
+            if (CmbLanguage.SelectedItem is ComboBoxItem item && item.Tag is string lang)
+            {
+                _settings.Language = lang;
+                ApplyLocalization(lang);
+                SaveSettings();
+            }
+        }
+
+        // ================= НАВИГАЦИЯ МЕЖДУ ЭКРАНАМИ =================
+
+        private void BtnSettings_Click(object sender, RoutedEventArgs e)
+        {
+            if (PnlSettingsView.Visibility == Visibility.Visible)
+                ShowMainView();
+            else
+                ShowSettingsView();
+        }
+
+        private void BtnBackToServers_Click(object sender, RoutedEventArgs e) => ShowMainView();
+
+        private void ShowMainView()
+        {
+            PnlSettingsView.Visibility = Visibility.Collapsed;
+            PnlMainView.Visibility = Visibility.Visible;
+            BtnSettings.Content = "⚙";
+            TxtHeaderTitle.Text = "gVPN";
+        }
+
+        private void ShowSettingsView()
+        {
+            PnlMainView.Visibility = Visibility.Collapsed;
+            PnlSettingsView.Visibility = Visibility.Visible;
+            BtnSettings.Content = "✕";
+            TxtHeaderTitle.Text = _settings.Language switch
+            {
+                "en" => "Settings",
+                "pl" => "Ustawienia",
+                _ => "Настройки"
+            };
+        }
+
+        // ================= НАДЕЖНЫЙ АВТОЗАПУСК WINDOWS =================
+
+        private void LoadSettings()
+        {
+            _isLoadingSettings = true;
+            try
+            {
+                if (File.Exists(_settingsPath))
+                {
+                    string json = File.ReadAllText(_settingsPath);
+                    var s = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
+                    if (s != null) _settings = s;
+                }
+            }
+            catch { }
+
+            ChkAutoStartApp.IsChecked = _settings.AutoStartApp;
+            ChkAutoStartConnect.IsChecked = _settings.AutoStartConnect;
+            ChkStartMinimized.IsChecked = _settings.StartMinimized;
+
+            foreach (ComboBoxItem item in CmbLanguage.Items)
+            {
+                if (item.Tag?.ToString() == _settings.Language)
+                {
+                    CmbLanguage.SelectedItem = item;
+                    break;
+                }
+            }
+
+            ApplyLocalization(_settings.Language);
+            _isLoadingSettings = false;
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                if (!Directory.Exists(AppDataFolder))
+                    Directory.CreateDirectory(AppDataFolder);
+
+                _settings.AutoStartApp = ChkAutoStartApp.IsChecked == true;
+                _settings.AutoStartConnect = ChkAutoStartConnect.IsChecked == true;
+                _settings.StartMinimized = ChkStartMinimized.IsChecked == true;
+
+                if (LstServers.SelectedItem is VpnProfile profile)
+                    _settings.LastSelectedProfileId = profile.Id;
+
+                string json = JsonSerializer.Serialize(_settings, JsonOptions);
+                File.WriteAllText(_settingsPath, json);
+
+                ApplyWindowsAutoStart(_settings.AutoStartApp);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка сохранения настроек: {ex.Message}");
+            }
+        }
+
+        private void OnSettingChanged(object sender, RoutedEventArgs e)
+        {
+            if (!_isLoadingSettings)
+                SaveSettings();
+        }
+
+        private void ApplyWindowsAutoStart(bool enable)
+        {
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true);
+                if (key == null) return;
+
+                // Для .NET 8 Single-File используем строгий ProcessPath
+                string? appPath = Environment.ProcessPath;
+                if (string.IsNullOrEmpty(appPath)) return;
+
+                if (enable)
+                {
+                    // Ключ автозапуска с параметром --autostart
+                    key.SetValue("gVPN", $"\"{appPath}\" --autostart");
+                }
+                else
+                {
+                    if (key.GetValue("gVPN") != null)
+                        key.DeleteValue("gVPN", false);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка настройки автозапуска Windows: {ex.Message}");
+            }
+        }
+
+        // ================= ОПТИМИЗАЦИЯ ПАМЯТИ =================
 
         private static void TrimMemory()
         {
@@ -122,14 +371,16 @@ namespace gVPN
             catch { }
         }
 
-        // ================= СИСТЕМНЫЙ ТРЕЙ =================
+        // ================= ТРЕЙ =================
 
         private void SetupTrayIcon()
         {
             Icon? appIcon = null;
             try
             {
-                appIcon = System.Drawing.Icon.ExtractAssociatedIcon(Process.GetCurrentProcess().MainModule?.FileName ?? "");
+                string? p = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(p))
+                    appIcon = System.Drawing.Icon.ExtractAssociatedIcon(p);
             }
             catch { }
 
@@ -137,14 +388,10 @@ namespace gVPN
             {
                 Visible = true,
                 Text = "gVPN — VPN Client",
-                // Если извлечь не удалось, используем системную, иначе нашу собственную
                 Icon = appIcon ?? System.Drawing.SystemIcons.Application
             };
 
-            _trayMenu = new ContextMenu
-            {
-                Style = (Style)FindResource("TrayMenuStyle")
-            };
+            _trayMenu = new ContextMenu { Style = (Style)FindResource("TrayMenuStyle") };
 
             _trayStatusItem = new MenuItem
             {
@@ -168,20 +415,20 @@ namespace gVPN
             };
             _trayConnectItem.Click += (s, e) => BtnConnect_Click(BtnConnect, new RoutedEventArgs());
 
-            var showItem = new MenuItem
+            _trayShowItem = new MenuItem
             {
                 Header = "Открыть окно",
                 Style = (Style)FindResource("TrayMenuItemStyle")
             };
-            showItem.Click += (s, e) => RestoreFromTray();
+            _trayShowItem.Click += (s, e) => RestoreFromTray();
 
-            var exitItem = new MenuItem
+            _trayExitItem = new MenuItem
             {
                 Header = "Выйти из gVPN",
                 Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F38BA8")),
                 Style = (Style)FindResource("TrayMenuItemStyle")
             };
-            exitItem.Click += (s, e) =>
+            _trayExitItem.Click += (s, e) =>
             {
                 _isRealExit = true;
                 this.Close();
@@ -191,25 +438,22 @@ namespace gVPN
             _trayMenu.Items.Add(_traySpeedItem);
             _trayMenu.Items.Add(new System.Windows.Controls.Separator { Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#313244")) });
             _trayMenu.Items.Add(_trayConnectItem);
-            _trayMenu.Items.Add(showItem);
+            _trayMenu.Items.Add(_trayShowItem);
             _trayMenu.Items.Add(new System.Windows.Controls.Separator { Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#313244")) });
-            _trayMenu.Items.Add(exitItem);
+            _trayMenu.Items.Add(_trayExitItem);
 
             _notifyIcon.MouseClick += (s, e) =>
             {
                 if (e.Button == MouseButtons.Left)
-                {
                     RestoreFromTray();
-                }
                 else if (e.Button == MouseButtons.Right)
-                {
                     _trayMenu.IsOpen = true;
-                }
             };
         }
 
         private void RestoreFromTray()
         {
+            ShowMainView();
             this.Show();
             this.WindowState = WindowState.Normal;
             this.Activate();
@@ -219,16 +463,9 @@ namespace gVPN
         {
             this.Hide();
             TrimMemory();
-
-            _notifyIcon?.ShowBalloonTip(
-                1200,
-                "gVPN работает в фоне",
-                "Приложение свернуто в трей. Вы можете закрыть его в любой момент через меню по правому клику.",
-                ToolTipIcon.Info
-            );
         }
 
-        // ================= ИЗВЛЕЧЕНИЕ ЯДРА XRAY =================
+        // ================= ИЗВЛЕЧЕНИЕ ЯДРА =================
 
         private void EnsureCoreExtracted()
         {
@@ -257,7 +494,7 @@ namespace gVPN
 
             if (targetResource == null)
             {
-                MessageBox.Show($"Ресурс {fileName} не найден внутри сборки!", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Ресурс {fileName} не найден!", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
                 return;
             }
 
@@ -283,10 +520,7 @@ namespace gVPN
             TrimMemory();
         }
 
-        private void BtnClose_Click(object sender, RoutedEventArgs e)
-        {
-            MinimizeToTray();
-        }
+        private void BtnClose_Click(object sender, RoutedEventArgs e) => MinimizeToTray();
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
@@ -311,17 +545,27 @@ namespace gVPN
             if (PnlAddServer.Visibility == Visibility.Visible)
             {
                 PnlAddServer.Visibility = Visibility.Collapsed;
-                BtnToggleAddPanel.Content = "+ Добавить";
+                BtnToggleAddPanel.Content = _settings.Language switch
+                {
+                    "en" => "+ Add",
+                    "pl" => "+ Dodaj",
+                    _ => "+ Добавить"
+                };
             }
             else
             {
                 PnlAddServer.Visibility = Visibility.Visible;
-                BtnToggleAddPanel.Content = "Скрыть форму";
+                BtnToggleAddPanel.Content = _settings.Language switch
+                {
+                    "en" => "Hide Form",
+                    "pl" => "Ukryj",
+                    _ => "Скрыть форму"
+                };
                 TxtInput.Focus();
             }
         }
 
-        // ================= ХРАНИЛИЩЕ ПРОФИЛЕЙ =================
+        // ================= ПРОФИЛИ =================
 
         private void LoadProfiles()
         {
@@ -357,11 +601,7 @@ namespace gVPN
         private async void BtnAdd_Click(object sender, RoutedEventArgs e)
         {
             string input = TxtInput.Text.Trim();
-            if (string.IsNullOrWhiteSpace(input))
-            {
-                MessageBox.Show("Введите ссылку или текст конфигурации!", "Предупреждение", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+            if (string.IsNullOrWhiteSpace(input)) return;
 
             BtnAdd.IsEnabled = false;
             try
@@ -369,39 +609,38 @@ namespace gVPN
                 if (input.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                     input.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 {
-                    string rawSubscription = await SharedHttpClient.GetStringAsync(input);
-                    string decoded = rawSubscription;
+                    string raw = await SharedHttpClient.GetStringAsync(input);
+                    string decoded = raw;
                     try
                     {
-                        byte[] data = Convert.FromBase64String(rawSubscription.Trim());
+                        byte[] data = Convert.FromBase64String(raw.Trim());
                         decoded = Encoding.UTF8.GetString(data);
                     }
                     catch { }
 
                     var lines = decoded.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                    int addedCount = 0;
+                    int added = 0;
                     foreach (var line in lines)
                     {
                         string trimmed = line.Trim();
                         if (trimmed.StartsWith("vless://", StringComparison.OrdinalIgnoreCase))
                         {
                             AddVlessProfile(trimmed);
-                            addedCount++;
+                            added++;
                         }
                     }
 
-                    if (addedCount == 0 && decoded.StartsWith("vless://", StringComparison.OrdinalIgnoreCase))
+                    if (added == 0 && decoded.StartsWith("vless://", StringComparison.OrdinalIgnoreCase))
                     {
                         AddVlessProfile(decoded.Trim());
-                        addedCount++;
+                        added++;
                     }
 
-                    MessageBox.Show($"Успешно импортировано серверов: {addedCount}", "Импорт", MessageBoxButton.OK, MessageBoxImage.Information);
+                    MessageBox.Show($"Добавлено серверов: {added}", "Импорт", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else if (input.StartsWith("vless://", StringComparison.OrdinalIgnoreCase))
                 {
                     AddVlessProfile(input);
-                    MessageBox.Show("Сервер VLESS успешно добавлен!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else if (input.Contains("[Interface]", StringComparison.OrdinalIgnoreCase))
                 {
@@ -414,21 +653,20 @@ namespace gVPN
                     _profiles.Add(profile);
                     SaveProfiles();
                     LstServers.SelectedItem = profile;
-                    MessageBox.Show("Конфигурация WireGuard успешно добавлена!", "Успех", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                else
-                {
-                    MessageBox.Show("Не удалось определить формат. Вставьте ссылку подписки, vless:// или WG конфиг.", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
-                    return;
                 }
 
                 TxtInput.Clear();
                 PnlAddServer.Visibility = Visibility.Collapsed;
-                BtnToggleAddPanel.Content = "+ Добавить";
+                BtnToggleAddPanel.Content = _settings.Language switch
+                {
+                    "en" => "+ Add",
+                    "pl" => "+ Dodaj",
+                    _ => "+ Добавить"
+                };
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Ошибка импорта: {ex.Message}", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show($"Ошибка: {ex.Message}");
             }
             finally
             {
@@ -462,11 +700,7 @@ namespace gVPN
 
         private void BtnDeleteServer_Click(object sender, RoutedEventArgs e)
         {
-            if (_isConnected)
-            {
-                MessageBox.Show("Сначала отключите VPN!", "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
+            if (_isConnected) return;
 
             if (sender is FrameworkElement element && element.DataContext is VpnProfile profile)
             {
@@ -477,7 +711,7 @@ namespace gVPN
             }
         }
 
-        private void LstServers_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        private void LstServers_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (_isConnected && _activeProfile != null && LstServers.SelectedItem != _activeProfile)
             {
@@ -487,25 +721,34 @@ namespace gVPN
 
             if (LstServers.SelectedItem is VpnProfile profile)
             {
-                TxtStatus.Text = $"Выбран: {profile.Name} ({profile.Type.ToUpper()})";
+                string selPrefix = _settings.Language switch
+                {
+                    "en" => "Selected",
+                    "pl" => "Wybrano",
+                    _ => "Выбран"
+                };
+                TxtStatus.Text = $"{selPrefix}: {profile.Name} ({profile.Type.ToUpper()})";
+                _settings.LastSelectedProfileId = profile.Id;
+                SaveSettings();
             }
         }
 
-        // ================= ПОДКЛЮЧЕНИЕ / ОТКЛЮЧЕНИЕ =================
+        // ================= ПОДКЛЮЧЕНИЕ =================
 
         private async void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
             if (!_isConnected)
             {
-                if (LstServers.SelectedItem is not VpnProfile profile)
-                {
-                    MessageBox.Show("Сначала добавьте и выберите сервер!", "Предупреждение", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
+                if (LstServers.SelectedItem is not VpnProfile profile) return;
 
                 _activeProfile = profile;
                 BtnConnect.IsEnabled = false;
-                TxtStatus.Text = "Подключение и проверка сети...";
+                TxtStatus.Text = _settings.Language switch
+                {
+                    "en" => "Connecting...",
+                    "pl" => "Łączenie...",
+                    _ => "Подключение..."
+                };
                 TxtStatus.Foreground = System.Windows.Media.Brushes.Orange;
 
                 try
@@ -520,27 +763,36 @@ namespace gVPN
                     if (!isOnline)
                     {
                         DisconnectAll();
-                        TxtStatus.Text = "Ошибка: сервер не отвечает";
+                        TxtStatus.Text = _settings.Language switch
+                        {
+                            "en" => "Error: Server not responding",
+                            "pl" => "Błąd: Serwer nie odpowiada",
+                            _ => "Ошибка: сервер не отвечает"
+                        };
                         TxtStatus.Foreground = System.Windows.Media.Brushes.IndianRed;
-                        MessageBox.Show(
-                            "Служба запущена, но трафик через сервер не проходит.\n" +
-                            "Возможные причины:\n" +
-                            "• Закрыт порт или файрвол на VPS\n" +
-                            "• Для VLESS: недоступен указанный SNI\n" +
-                            "• Для WireGuard: неверный Endpoint, ключи или блокируется UDP-порт",
-                            "Ошибка проверки сети", MessageBoxButton.OK, MessageBoxImage.Error);
                         return;
                     }
 
                     _isConnected = true;
-                    BtnConnect.Content = "Отключиться";
+                    BtnConnect.Content = _settings.Language switch
+                    {
+                        "en" => "Disconnect",
+                        "pl" => "Rozłącz",
+                        _ => "Отключиться"
+                    };
                     BtnConnect.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F38BA8"));
-                    TxtStatus.Text = $"Подключено: {profile.Name}";
+
+                    string connPrefix = _settings.Language switch
+                    {
+                        "en" => "Connected",
+                        "pl" => "Połączono",
+                        _ => "Подключено"
+                    };
+                    TxtStatus.Text = $"{connPrefix}: {profile.Name}";
                     TxtStatus.Foreground = System.Windows.Media.Brushes.LightGreen;
 
-                    // Обновление трея
-                    if (_trayConnectItem != null) _trayConnectItem.Header = "Отключиться";
-                    if (_trayStatusItem != null) _trayStatusItem.Header = $"Подключено: {profile.Name}";
+                    if (_trayConnectItem != null) _trayConnectItem.Header = BtnConnect.Content;
+                    if (_trayStatusItem != null) _trayStatusItem.Header = $"{connPrefix}: {profile.Name}";
                     if (_traySpeedItem != null) _traySpeedItem.Visibility = Visibility.Visible;
 
                     _cachedInterfaces = NetworkInterface.GetAllNetworkInterfaces();
@@ -553,9 +805,9 @@ namespace gVPN
                 catch (Exception ex)
                 {
                     DisconnectAll();
-                    TxtStatus.Text = "Ошибка запуска";
+                    TxtStatus.Text = "Error";
                     TxtStatus.Foreground = System.Windows.Media.Brushes.IndianRed;
-                    MessageBox.Show(ex.Message, "Ошибка запуска", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show(ex.Message);
                 }
                 finally
                 {
@@ -567,14 +819,28 @@ namespace gVPN
                 DisconnectAll();
                 _isConnected = false;
                 _activeProfile = null;
-                BtnConnect.Content = "Подключиться";
+                BtnConnect.Content = _settings.Language switch
+                {
+                    "en" => "Connect",
+                    "pl" => "Połącz",
+                    _ => "Подключиться"
+                };
                 BtnConnect.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#89B4FA"));
-                TxtStatus.Text = "Статус: Отключено";
+                TxtStatus.Text = _settings.Language switch
+                {
+                    "en" => "Status: Disconnected",
+                    "pl" => "Status: Rozłączono",
+                    _ => "Статус: Отключено"
+                };
                 TxtStatus.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#BAC2DE"));
 
-                // Обновление трея
-                if (_trayConnectItem != null) _trayConnectItem.Header = "Подключиться";
-                if (_trayStatusItem != null) _trayStatusItem.Header = "gVPN: Отключено";
+                if (_trayConnectItem != null) _trayConnectItem.Header = BtnConnect.Content;
+                if (_trayStatusItem != null) _trayStatusItem.Header = _settings.Language switch
+                {
+                    "en" => "gVPN: Disconnected",
+                    "pl" => "gVPN: Rozłączono",
+                    _ => "gVPN: Отключено"
+                };
                 if (_traySpeedItem != null) _traySpeedItem.Visibility = Visibility.Collapsed;
                 TrimMemory();
             }
@@ -583,7 +849,6 @@ namespace gVPN
         private async Task<bool> VerifyConnectionAsync()
         {
             await Task.Delay(1200);
-
             for (int attempt = 1; attempt <= 3; attempt++)
             {
                 try
@@ -593,35 +858,24 @@ namespace gVPN
                         Proxy = new WebProxy("http://127.0.0.1:10809"),
                         UseProxy = true
                     };
-
                     using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(3) };
                     var response = await client.GetAsync("http://cp.cloudflare.com/generate_204");
                     if (response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NoContent)
-                    {
                         return true;
-                    }
                 }
-                catch
-                {
-                    await Task.Delay(800);
-                }
+                catch { await Task.Delay(800); }
             }
-
             return false;
         }
 
         private void SpeedTimer_Tick(object? sender, EventArgs e)
         {
             if (_cachedInterfaces == null) return;
+            long currentReceived = 0, currentSent = 0;
 
-            long currentReceived = 0;
-            long currentSent = 0;
-
-            for (int i = 0; i < _cachedInterfaces.Length; i++)
+            foreach (var ni in _cachedInterfaces)
             {
-                var ni = _cachedInterfaces[i];
-                if (ni.OperationalStatus == OperationalStatus.Up &&
-                    ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                if (ni.OperationalStatus == OperationalStatus.Up && ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
                 {
                     try
                     {
@@ -635,18 +889,17 @@ namespace gVPN
 
             if (_lastBytesReceived > 0 && _lastBytesSent > 0)
             {
-                long diffReceived = Math.Max(0, currentReceived - _lastBytesReceived);
-                long diffSent = Math.Max(0, currentSent - _lastBytesSent);
+                double downSpeedMb = Math.Max(0, currentReceived - _lastBytesReceived) / 1048576.0;
+                double upSpeedMb = Math.Max(0, currentSent - _lastBytesSent) / 1048576.0;
 
-                double downSpeedMb = diffReceived / 1048576.0;
-                double upSpeedMb = diffSent / 1048576.0;
-
-                TxtDownloadSpeed.Text = $"↓ {downSpeedMb:F2} МБ/с";
-                TxtUploadSpeed.Text = $"↑ {upSpeedMb:F2} МБ/с";
+                string mbUnit = _settings.Language == "en" ? "MB/s" : "МБ/с";
+                TxtDownloadSpeed.Text = $"↓ {downSpeedMb:F2} {mbUnit}";
+                TxtUploadSpeed.Text = $"↑ {upSpeedMb:F2} {mbUnit}";
 
                 if (_traySpeedItem != null && _traySpeedItem.Visibility == Visibility.Visible)
                 {
-                    _traySpeedItem.Header = $"Скорость: ↓ {downSpeedMb:F1} МБ/с | ↑ {upSpeedMb:F1} МБ/с";
+                    string spdPrefix = _settings.Language switch { "en" => "Speed", "pl" => "Prędkość", _ => "Скорость" };
+                    _traySpeedItem.Header = $"{spdPrefix}: ↓ {downSpeedMb:F1} {mbUnit} | ↑ {upSpeedMb:F1} {mbUnit}";
                 }
             }
 
@@ -654,7 +907,7 @@ namespace gVPN
             _lastBytesSent = currentSent;
         }
 
-        // ================= VLESS ЧЕРЕЗ XRAY =================
+        // ================= VLESS & WIREGUARD =================
 
         private void StartXray(string vlessUrl)
         {
@@ -663,8 +916,7 @@ namespace gVPN
             File.WriteAllText(configPath, configJson);
 
             string xrayExe = Path.Combine(_coreDir, "xray.exe");
-            if (!File.Exists(xrayExe))
-                throw new FileNotFoundException("Файл xray.exe не найден!");
+            if (!File.Exists(xrayExe)) throw new FileNotFoundException("xray.exe not found");
 
             ProcessStartInfo psi = new()
             {
@@ -673,7 +925,6 @@ namespace gVPN
                 CreateNoWindow = true,
                 UseShellExecute = false
             };
-
             psi.EnvironmentVariables["GOMEMLIMIT"] = "24MiB";
             psi.EnvironmentVariables["GOGC"] = "30";
 
@@ -744,8 +995,6 @@ namespace gVPN
             """;
         }
 
-        // ================= WIREGUARD ЧЕРЕЗ XRAY =================
-
         private void StartWireGuard(string confContent)
         {
             string configJson = GenerateWireGuardXrayConfig(confContent);
@@ -753,8 +1002,7 @@ namespace gVPN
             File.WriteAllText(configPath, configJson);
 
             string xrayExe = Path.Combine(_coreDir, "xray.exe");
-            if (!File.Exists(xrayExe))
-                throw new FileNotFoundException("Файл xray.exe не найден!");
+            if (!File.Exists(xrayExe)) throw new FileNotFoundException("xray.exe not found");
 
             ProcessStartInfo psi = new()
             {
@@ -763,7 +1011,6 @@ namespace gVPN
                 CreateNoWindow = true,
                 UseShellExecute = false
             };
-
             psi.EnvironmentVariables["GOMEMLIMIT"] = "24MiB";
             psi.EnvironmentVariables["GOGC"] = "30";
 
@@ -773,11 +1020,7 @@ namespace gVPN
 
         private string GenerateWireGuardXrayConfig(string confContent)
         {
-            string privateKey = "";
-            string address = "10.0.0.2/32";
-            string endpoint = "";
-            string publicKey = "";
-            string presharedKey = "";
+            string privateKey = "", address = "10.0.0.2/32", endpoint = "", publicKey = "", presharedKey = "";
             int mtu = 1420;
 
             var lines = confContent.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
@@ -790,18 +1033,12 @@ namespace gVPN
                 string key = line.Substring(0, eqIndex).Trim();
                 string val = line.Substring(eqIndex + 1).Trim();
 
-                if (key.Equals("PrivateKey", StringComparison.OrdinalIgnoreCase))
-                    privateKey = val;
-                else if (key.Equals("Address", StringComparison.OrdinalIgnoreCase))
-                    address = val.Contains('/') ? val : $"{val}/32";
-                else if (key.Equals("PublicKey", StringComparison.OrdinalIgnoreCase))
-                    publicKey = val;
-                else if (key.Equals("Endpoint", StringComparison.OrdinalIgnoreCase))
-                    endpoint = val;
-                else if (key.Equals("PresharedKey", StringComparison.OrdinalIgnoreCase))
-                    presharedKey = val;
-                else if (key.Equals("MTU", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out int parsedMtu))
-                    mtu = parsedMtu;
+                if (key.Equals("PrivateKey", StringComparison.OrdinalIgnoreCase)) privateKey = val;
+                else if (key.Equals("Address", StringComparison.OrdinalIgnoreCase)) address = val.Contains('/') ? val : $"{val}/32";
+                else if (key.Equals("PublicKey", StringComparison.OrdinalIgnoreCase)) publicKey = val;
+                else if (key.Equals("Endpoint", StringComparison.OrdinalIgnoreCase)) endpoint = val;
+                else if (key.Equals("PresharedKey", StringComparison.OrdinalIgnoreCase)) presharedKey = val;
+                else if (key.Equals("MTU", StringComparison.OrdinalIgnoreCase) && int.TryParse(val, out int parsedMtu)) mtu = parsedMtu;
             }
 
             int lastColon = endpoint.LastIndexOf(':');
@@ -849,8 +1086,6 @@ namespace gVPN
             """;
         }
 
-        // ================= СЛУЖЕБНЫЕ МЕТОДЫ =================
-
         private void DisconnectAll()
         {
             _speedTimer.Stop();
@@ -869,13 +1104,12 @@ namespace gVPN
 
         private void SetSystemProxy(bool enable, string proxyServer = "")
         {
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+            using var key = Registry.CurrentUser.OpenSubKey(
                 @"Software\Microsoft\Windows\CurrentVersion\Internet Settings", true);
             if (key != null)
             {
                 key.SetValue("ProxyEnable", enable ? 1 : 0);
-                if (enable)
-                    key.SetValue("ProxyServer", proxyServer);
+                if (enable) key.SetValue("ProxyServer", proxyServer);
 
                 InternetSetOption(IntPtr.Zero, INTERNET_OPTION_SETTINGS_CHANGED, IntPtr.Zero, 0);
                 InternetSetOption(IntPtr.Zero, INTERNET_OPTION_REFRESH, IntPtr.Zero, 0);

@@ -13,7 +13,7 @@
     </shell:WindowChrome.WindowChrome>
 
     <Window.Resources>
-        <!-- Стилизация самого ListBox: гарантирует, что фон ВСЕГДА прозрачный/тёмный -->
+        <!-- Стилизация списка серверов -->
         <Style x:Key="DarkListBoxStyle" TargetType="ListBox">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -32,53 +32,6 @@
             </Setter>
         </Style>
 
-        <!-- Стили для кастомного тёмного меню в трее -->
-        <Style x:Key="TrayMenuStyle" TargetType="ContextMenu">
-            <Setter Property="Background" Value="#181825"/>
-            <Setter Property="BorderBrush" Value="#313244"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Foreground" Value="#CDD6F4"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ContextMenu">
-                        <Border Background="{TemplateBinding Background}"
-                        BorderBrush="{TemplateBinding BorderBrush}"
-                        BorderThickness="{TemplateBinding BorderThickness}"
-                        CornerRadius="8" Padding="{TemplateBinding Padding}">
-                            <StackPanel IsItemsHost="True"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="TrayMenuItemStyle" TargetType="MenuItem">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="#CDD6F4"/>
-            <Setter Property="Height" Value="28"/>
-            <Setter Property="Padding" Value="10,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="MenuItem">
-                        <Border x:Name="ItemBorder" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsHighlighted" Value="True">
-                                <Setter TargetName="ItemBorder" Property="Background" Value="#313244"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#6C7086"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Карточка сервера -->
         <Style x:Key="ServerItemStyle" TargetType="ListBoxItem">
             <Setter Property="Background" Value="#252538"/>
             <Setter Property="Margin" Value="0,0,0,8"/>
@@ -102,16 +55,12 @@
                                 <Setter TargetName="ItemBorder" Property="BorderBrush" Value="#89B4FA"/>
                                 <Setter TargetName="ItemBorder" Property="BorderThickness" Value="1.5"/>
                             </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="ItemBorder" Property="Background" Value="#252538"/>
-                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
 
-        <!-- Кнопки окна -->
         <Style x:Key="WindowControlBtn" TargetType="Button">
             <Setter Property="Width" Value="32"/>
             <Setter Property="Height" Value="32"/>
@@ -154,17 +103,65 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Стили трея -->
+        <Style x:Key="TrayMenuStyle" TargetType="ContextMenu">
+            <Setter Property="Background" Value="#181825"/>
+            <Setter Property="BorderBrush" Value="#313244"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#CDD6F4"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <StackPanel IsItemsHost="True"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TrayMenuItemStyle" TargetType="MenuItem">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#CDD6F4"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="ItemBorder" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="ItemBorder" Property="Background" Value="#313244"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#6C7086"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DarkCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#CDD6F4"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Margin" Value="0,0,0,14"/>
+        </Style>
     </Window.Resources>
 
-    <!-- Корневая рамка окна -->
     <Border Background="#181825" CornerRadius="12" BorderBrush="#313244" BorderThickness="1" SnapsToDevicePixels="True">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="46"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
@@ -173,113 +170,167 @@
                 <Grid>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
                         <Border Background="#89B4FA" Width="10" Height="10" CornerRadius="5" Margin="0,0,8,0"/>
-                        <TextBlock Text="gVPN" Foreground="#CDD6F4" FontWeight="Bold" FontSize="15"/>
+                        <TextBlock x:Name="TxtHeaderTitle" Text="gVPN" Foreground="#CDD6F4" FontWeight="Bold" FontSize="15"/>
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0">
-                        <Button Content="—" Style="{StaticResource WindowControlBtn}" Click="BtnMinimize_Click" ToolTip="Свернуть"/>
-                        <Button Content="✕" Style="{StaticResource WindowCloseBtn}" Click="BtnClose_Click" ToolTip="Закрыть"/>
+                        <Button x:Name="BtnSettings" Content="⚙" Style="{StaticResource WindowControlBtn}" 
+                                FontSize="15" Click="BtnSettings_Click" ToolTip="Settings"/>
+                        <Button Content="—" Style="{StaticResource WindowControlBtn}" Click="BtnMinimize_Click" ToolTip="Minimize"/>
+                        <Button Content="✕" Style="{StaticResource WindowCloseBtn}" Click="BtnClose_Click" ToolTip="Close"/>
                     </StackPanel>
                 </Grid>
             </Border>
 
-            <!-- 2. Подзаголовок списка -->
-            <Grid Grid.Row="1" Margin="18,4,18,8">
-                <TextBlock Text="Доступные серверы" Foreground="#A6ADC8" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                <Button x:Name="BtnToggleAddPanel" Content="+ Добавить" HorizontalAlignment="Right"
-                        Background="Transparent" Foreground="#89B4FA" BorderThickness="0" 
-                        FontSize="12" FontWeight="SemiBold" Cursor="Hand" Click="BtnToggleAddPanel_Click"/>
-            </Grid>
+            <!-- 2. ЭКРАН СЕРВЕРОВ -->
+            <StackPanel x:Name="PnlMainView" Grid.Row="1" Visibility="Visible">
+                <Grid Margin="18,4,18,8">
+                    <TextBlock x:Name="LblAvailableServers" Text="Доступные серверы" Foreground="#A6ADC8" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <Button x:Name="BtnToggleAddPanel" Content="+ Добавить" HorizontalAlignment="Right"
+                            Background="Transparent" Foreground="#89B4FA" BorderThickness="0" 
+                            FontSize="12" FontWeight="SemiBold" Cursor="Hand" Click="BtnToggleAddPanel_Click"/>
+                </Grid>
 
-            <!-- 3. Список серверов (темный контейнер, который больше никогда не белеет) -->
-            <Border Grid.Row="2" Background="#1E1E2E" CornerRadius="8" Margin="16,0,16,10" Padding="6" MaxHeight="220">
-                <ListBox x:Name="LstServers" 
-                         Style="{StaticResource DarkListBoxStyle}"
-                         ItemContainerStyle="{StaticResource ServerItemStyle}"
-                         SelectionChanged="LstServers_SelectionChanged">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
+                <Border Background="#1E1E2E" CornerRadius="8" Margin="16,0,16,10" Padding="6" MaxHeight="220">
+                    <ListBox x:Name="LstServers" 
+                             Style="{StaticResource DarkListBoxStyle}"
+                             ItemContainerStyle="{StaticResource ServerItemStyle}"
+                             SelectionChanged="LstServers_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
 
-                                <TextBlock Grid.Column="0" Text="{Binding Name}" Foreground="#CDD6F4" 
-                                           FontSize="13" FontWeight="Medium" VerticalAlignment="Center" 
-                                           TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="0" Text="{Binding Name}" Foreground="#CDD6F4" 
+                                               FontSize="13" FontWeight="Medium" VerticalAlignment="Center" 
+                                               TextTrimming="CharacterEllipsis"/>
 
-                                <Border Grid.Column="1" Background="#313244" CornerRadius="4" Padding="6,2" Margin="8,0,8,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding Type}" Foreground="#89B4FA" FontSize="10" FontWeight="Bold"/>
-                                </Border>
+                                    <Border Grid.Column="1" Background="#313244" CornerRadius="4" Padding="6,2" Margin="8,0,8,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Type}" Foreground="#89B4FA" FontSize="10" FontWeight="Bold"/>
+                                    </Border>
 
-                                <Button Grid.Column="2" Content="✕" Width="22" Height="22" Background="Transparent" 
-                                        Foreground="#6C7086" BorderThickness="0" Cursor="Hand"
-                                        Click="BtnDeleteServer_Click" ToolTip="Удалить сервер">
-                                    <Button.Resources>
-                                        <Style TargetType="Border">
-                                            <Setter Property="CornerRadius" Value="4"/>
-                                        </Style>
-                                    </Button.Resources>
-                                </Button>
-                            </Grid>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
-            </Border>
+                                    <Button Grid.Column="2" Content="✕" Width="22" Height="22" Background="Transparent" 
+                                            Foreground="#6C7086" BorderThickness="0" Cursor="Hand"
+                                            Click="BtnDeleteServer_Click" ToolTip="Delete">
+                                        <Button.Resources>
+                                            <Style TargetType="Border">
+                                                <Setter Property="CornerRadius" Value="4"/>
+                                            </Style>
+                                        </Button.Resources>
+                                    </Button>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
 
-            <!-- 4. Скрытая форма добавления -->
-            <Border x:Name="PnlAddServer" Grid.Row="3" Margin="16,0,16,12" Background="#1E1E2E" 
-                    CornerRadius="8" Padding="10" Visibility="Collapsed">
-                <StackPanel>
-                    <TextBlock Text="Вставьте vless://, URL подписки или WG конфиг:" 
-                               Foreground="#A6ADC8" FontSize="11" Margin="0,0,0,6"/>
-                    <TextBox x:Name="TxtInput" Height="65" Background="#181825" Foreground="#CDD6F4" 
-                             BorderBrush="#313244" BorderThickness="1" TextWrapping="Wrap" 
-                             AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8" FontSize="12">
-                        <TextBox.Resources>
-                            <Style TargetType="Border">
-                                <Setter Property="CornerRadius" Value="6"/>
-                            </Style>
-                        </TextBox.Resources>
-                    </TextBox>
-                    <Button x:Name="BtnAdd" Content="Сохранить подключение" Height="32" Margin="0,8,0,0" 
-                            Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" FontSize="12"
-                            BorderThickness="0" Cursor="Hand" Click="BtnAdd_Click">
-                        <Button.Resources>
-                            <Style TargetType="Border">
-                                <Setter Property="CornerRadius" Value="6"/>
-                            </Style>
-                        </Button.Resources>
-                    </Button>
+                <!-- Панель добавления -->
+                <Border x:Name="PnlAddServer" Margin="16,0,16,12" Background="#1E1E2E" 
+                        CornerRadius="8" Padding="10" Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock x:Name="LblAddHint" Text="Вставьте vless://, URL подписки или WG конфиг:" 
+                                   Foreground="#A6ADC8" FontSize="11" Margin="0,0,0,6"/>
+                        <TextBox x:Name="TxtInput" Height="65" Background="#181825" Foreground="#CDD6F4" 
+                                 BorderBrush="#313244" BorderThickness="1" TextWrapping="Wrap" 
+                                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Padding="8" FontSize="12">
+                            <TextBox.Resources>
+                                <Style TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                </Style>
+                            </TextBox.Resources>
+                        </TextBox>
+                        <Button x:Name="BtnAdd" Content="Сохранить подключение" Height="32" Margin="0,8,0,0" 
+                                Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" FontSize="12"
+                                BorderThickness="0" Cursor="Hand" Click="BtnAdd_Click">
+                            <Button.Resources>
+                                <Style TargetType="Border">
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                </Style>
+                            </Button.Resources>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Margin="0,4,0,12" HorizontalAlignment="Center">
+                    <TextBlock x:Name="TxtStatus" Text="Статус: Отключено" Foreground="#BAC2DE" 
+                               HorizontalAlignment="Center" FontSize="13"/>
+
+                    <StackPanel x:Name="PnlSpeed" Orientation="Horizontal" HorizontalAlignment="Center" 
+                                Margin="0,6,0,0" Visibility="Collapsed">
+                        <TextBlock x:Name="TxtDownloadSpeed" Text="↓ 0.00 МБ/с" Foreground="#A6E3A1" 
+                                   FontSize="12" FontWeight="SemiBold" Margin="0,0,14,0"/>
+                        <TextBlock x:Name="TxtUploadSpeed" Text="↑ 0.00 МБ/с" Foreground="#89B4FA" 
+                                   FontSize="12" FontWeight="SemiBold"/>
+                    </StackPanel>
                 </StackPanel>
-            </Border>
 
-            <!-- 5. Статус и скорость -->
-            <StackPanel Grid.Row="4" Margin="0,4,0,12" HorizontalAlignment="Center">
-                <TextBlock x:Name="TxtStatus" Text="Статус: Отключено" Foreground="#BAC2DE" 
-                           HorizontalAlignment="Center" FontSize="13"/>
-
-                <StackPanel x:Name="PnlSpeed" Orientation="Horizontal" HorizontalAlignment="Center" 
-                            Margin="0,6,0,0" Visibility="Collapsed">
-                    <TextBlock x:Name="TxtDownloadSpeed" Text="↓ 0.00 МБ/с" Foreground="#A6E3A1" 
-                               FontSize="12" FontWeight="SemiBold" Margin="0,0,14,0"/>
-                    <TextBlock x:Name="TxtUploadSpeed" Text="↑ 0.00 МБ/с" Foreground="#89B4FA" 
-                               FontSize="12" FontWeight="SemiBold"/>
-                </StackPanel>
+                <Button x:Name="BtnConnect" Content="Подключиться" Height="46" Margin="16,0,16,16" 
+                        Background="#89B4FA" Foreground="#11111B" FontWeight="Bold" FontSize="15" 
+                        BorderThickness="0" Cursor="Hand" Click="BtnConnect_Click">
+                    <Button.Resources>
+                        <Style TargetType="Border">
+                            <Setter Property="CornerRadius" Value="8"/>
+                        </Style>
+                    </Button.Resources>
+                </Button>
             </StackPanel>
 
-            <!-- 6. Кнопка подключения -->
-            <Button x:Name="BtnConnect" Grid.Row="5" Content="Подключиться" Height="46" Margin="16,0,16,16" 
-                    Background="#89B4FA" Foreground="#11111B" FontWeight="Bold" FontSize="15" 
-                    BorderThickness="0" Cursor="Hand" Click="BtnConnect_Click">
-                <Button.Resources>
-                    <Style TargetType="Border">
-                        <Setter Property="CornerRadius" Value="8"/>
-                    </Style>
-                </Button.Resources>
-            </Button>
+            <!-- 3. ЭКРАН НАСТРОЕК С ВЫБОРОМ ЯЗЫКА -->
+            <StackPanel x:Name="PnlSettingsView" Grid.Row="1" Margin="20,10,20,20" Visibility="Collapsed">
+                <TextBlock x:Name="LblGeneralSettings" Text="Общие параметры" Foreground="#A6ADC8" FontSize="12" FontWeight="SemiBold" Margin="0,0,0,14"/>
+
+                <!-- Выбор языка -->
+                <Border Background="#1E1E2E" CornerRadius="8" Padding="14" Margin="0,0,0,14">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="130"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="LblLanguage" Text="Язык интерфейса" Foreground="#CDD6F4" FontSize="13" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="CmbLanguage" Grid.Column="1" Height="28" Background="#181825" Foreground="#CDD6F4"
+                                  BorderBrush="#313244" SelectionChanged="CmbLanguage_SelectionChanged">
+                            <ComboBoxItem Content="Русский" Tag="ru"/>
+                            <ComboBoxItem Content="English" Tag="en"/>
+                            <ComboBoxItem Content="Polski" Tag="pl"/>
+                        </ComboBox>
+                    </Grid>
+                </Border>
+
+                <!-- Автозапуск -->
+                <Border Background="#1E1E2E" CornerRadius="8" Padding="14,14,14,6" Margin="0,0,0,16">
+                    <StackPanel>
+                        <CheckBox x:Name="ChkAutoStartApp" Content="Запускать gVPN вместе с Windows" 
+                                  Style="{StaticResource DarkCheckBoxStyle}" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
+
+                        <CheckBox x:Name="ChkAutoStartConnect" Content="Автоматически подключать выбранный сервер" 
+                                  Style="{StaticResource DarkCheckBoxStyle}" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
+
+                        <CheckBox x:Name="ChkStartMinimized" Content="Запускать свернутым в системный трей" 
+                                  Style="{StaticResource DarkCheckBoxStyle}" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#1E1E2E" CornerRadius="8" Padding="14" Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="Xray-core (VLESS Reality &amp; WireGuard)" Foreground="#CDD6F4" FontSize="12" Margin="0,0,0,4"/>
+                        <TextBlock Text="%AppData%\gVPN" Foreground="#6C7086" FontSize="11"/>
+                    </StackPanel>
+                </Border>
+
+                <Button x:Name="BtnBackToServers" Content="← Назад к серверам" Height="40" 
+                        Background="#313244" Foreground="#CDD6F4" FontWeight="SemiBold" FontSize="13" 
+                        BorderThickness="0" Cursor="Hand" Click="BtnBackToServers_Click">
+                    <Button.Resources>
+                        <Style TargetType="Border">
+                            <Setter Property="CornerRadius" Value="8"/>
+                        </Style>
+                    </Button.Resources>
+                </Button>
+            </StackPanel>
         </Grid>
     </Border>
 </Window>

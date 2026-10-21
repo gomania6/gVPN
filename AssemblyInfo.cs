@@ -1,1 +1,3 @@
-using System.Windows;
+using System.Runtime.Versioning;
+
+[assembly: SupportedOSPlatform("windows")]

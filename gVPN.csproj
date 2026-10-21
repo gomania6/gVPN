@@ -1,28 +1,30 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
+
 	<PropertyGroup>
 		<OutputType>WinExe</OutputType>
 		<TargetFramework>net8.0-windows</TargetFramework>
 		<Nullable>enable</Nullable>
 		<UseWPF>true</UseWPF>
 		<UseWindowsForms>true</UseWindowsForms>
-		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
 		<ApplicationManifest>app.manifest</ApplicationManifest>
-		
-		<ApplicationIcon>app.ico</ApplicationIcon>
-		
+		<ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
+
 		<!-- Сборка в один файл -->
-		<PublishSingleFile>true</PublishSingleFile>
-		<SelfContained>true</SelfContained>
 		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<SelfContained>true</SelfContained>
+		<PublishSingleFile>true</PublishSingleFile>
 		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
 		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+		<!-- Оптимизация потребления ОЗУ -->
+		<ServerGarbageCollection>false</ServerGarbageCollection>
+		<ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+		<RetainVMGarbageCollection>false</RetainVMGarbageCollection>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<None Remove="Core\xray.exe" />
+		<EmbeddedResource Include="Core\xray.exe" Condition="Exists('Core\xray.exe')" />
 	</ItemGroup>
 
-	<ItemGroup>
-		<EmbeddedResource Include="Core\xray.exe" />
-	</ItemGroup>
 </Project>

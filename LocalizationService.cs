@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Windows;
 
 namespace gVPN
 {
@@ -11,8 +12,8 @@ namespace gVPN
             {
                 case "en":
                     w.LblAvailableServers.Text = "Available Servers";
-                    w.BtnToggleAddPanel.Content = w.PnlAddServer.Visibility == System.Windows.Visibility.Visible ? "Hide Form" : "+ Add";
-                    w.LblAddHint.Text = "Paste vless://, subscription URL, or WG config:";
+                    w.BtnToggleAddPanel.Content = w.PnlAddServer.Visibility == Visibility.Visible ? "Hide Form" : "+ Add";
+                    w.LblAddHint.Text = "Paste vless://, trojan://, ss://, subscription URL, or WG config:";
                     w.BtnAdd.Content = "Save Connection";
                     w.BtnConnect.Content = isConnected ? "Disconnect" : "Connect";
                     w.TxtStatus.Text = isConnected ? $"Connected: {profileName}" : "Status: Disconnected";
@@ -26,13 +27,13 @@ namespace gVPN
                     w.RbTunnelApps.Content = "Only selected applications";
                     w.LblSelectedApps.Text = "Selected applications (.exe):";
                     w.BtnAddApp.Content = "+ Add .exe";
-                    w.BtnBackToServers.Content = "← Back to Servers";
+                    w.BtnBackToServers.Content = "Back to Servers";
                     break;
 
                 case "pl":
                     w.LblAvailableServers.Text = "Dostępne serwery";
-                    w.BtnToggleAddPanel.Content = w.PnlAddServer.Visibility == System.Windows.Visibility.Visible ? "Ukryj" : "+ Dodaj";
-                    w.LblAddHint.Text = "Wklej link vless://, subskrypcję lub plik WG:";
+                    w.BtnToggleAddPanel.Content = w.PnlAddServer.Visibility == Visibility.Visible ? "Ukryj" : "+ Dodaj";
+                    w.LblAddHint.Text = "Wklej vless://, trojan://, ss://, subskrypcję lub plik WG:";
                     w.BtnAdd.Content = "Zapisz połączenie";
                     w.BtnConnect.Content = isConnected ? "Rozłącz" : "Połącz";
                     w.TxtStatus.Text = isConnected ? $"Połączono: {profileName}" : "Status: Rozłączono";
@@ -46,27 +47,27 @@ namespace gVPN
                     w.RbTunnelApps.Content = "Tylko wybrane aplikacje";
                     w.LblSelectedApps.Text = "Wybrane aplikacje (.exe):";
                     w.BtnAddApp.Content = "+ Dodaj .exe";
-                    w.BtnBackToServers.Content = "← Wróć do serwerów";
+                    w.BtnBackToServers.Content = "Powrót do serwerów";
                     break;
 
                 default: // ru
                     w.LblAvailableServers.Text = "Доступные серверы";
-                    w.BtnToggleAddPanel.Content = w.PnlAddServer.Visibility == System.Windows.Visibility.Visible ? "Скрыть форму" : "+ Добавить";
-                    w.LblAddHint.Text = "Вставьте vless://, URL подписки или WG конфиг:";
+                    w.BtnToggleAddPanel.Content = w.PnlAddServer.Visibility == Visibility.Visible ? "Скрыть" : "+ Добавить";
+                    w.LblAddHint.Text = "Вставьте vless://, trojan://, ss://, URL подписки или WG конфиг:";
                     w.BtnAdd.Content = "Сохранить подключение";
-                    w.BtnConnect.Content = isConnected ? "Отключиться" : "Подключиться";
+                    w.BtnConnect.Content = isConnected ? "Отключить" : "Подключить";
                     w.TxtStatus.Text = isConnected ? $"Подключено: {profileName}" : "Статус: Отключено";
-                    w.LblGeneralSettings.Text = "Общие параметры";
+                    w.LblGeneralSettings.Text = "Основные настройки";
                     w.LblLanguage.Text = "Язык интерфейса";
                     w.ChkAutoStartApp.Content = "Запускать gVPN вместе с Windows";
                     w.ChkAutoStartConnect.Content = "Автоматически подключать выбранный сервер";
-                    w.ChkStartMinimized.Content = "Запускать свернутым в системный трей";
+                    w.ChkStartMinimized.Content = "Запускать свёрнутым в трей";
                     w.LblRoutingTitle.Text = "Режим маршрутизации трафика";
-                    w.RbTunnelAll.Content = "Весь трафик ПК (Все приложения)";
+                    w.RbTunnelAll.Content = "Весь трафик ПК (Глобальный VPN)";
                     w.RbTunnelApps.Content = "Только выбранные приложения";
-                    w.LblSelectedApps.Text = "Список приложений (.exe):";
-                    w.BtnAddApp.Content = "+ Выбрать .exe";
-                    w.BtnBackToServers.Content = "← Назад к серверам";
+                    w.LblSelectedApps.Text = "Выбранные приложения (.exe):";
+                    w.BtnAddApp.Content = "+ Добавить .exe";
+                    w.BtnBackToServers.Content = "Назад к серверам";
                     break;
             }
         }

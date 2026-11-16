@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -34,6 +33,7 @@ namespace gVPN
 
         [DllImport("wininet.dll", SetLastError = true)]
         private static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
+
         private const int INTERNET_OPTION_SETTINGS_CHANGED = 39;
         private const int INTERNET_OPTION_REFRESH = 37;
 
@@ -66,13 +66,16 @@ namespace gVPN
         {
             Stop();
             KillOrphanedXrayProcesses();
-
             SettingsService.EnsureDirectoryCreated();
             EnsureCoreExtracted();
 
-            string configJson = profile.Type.Equals("vless", StringComparison.OrdinalIgnoreCase)
-                ? GenerateVlessConfig(profile.RawData)
-                : GenerateWireGuardConfig(profile.RawData);
+            string configJson = profile.Type.ToLowerInvariant() switch
+            {
+                "vless" => GenerateVlessConfig(profile.RawData),
+                "trojan" => GenerateTrojanConfig(profile.RawData),
+                "shadowsocks" => GenerateShadowsocksConfig(profile.RawData),
+                _ => GenerateWireGuardConfig(profile.RawData)
+            };
 
             File.WriteAllText(_configPath, configJson, new UTF8Encoding(false));
 
@@ -95,15 +98,12 @@ namespace gVPN
 
             if (enableGlobalProxy)
             {
-                // Режим "Весь трафик ПК"
                 SetSystemProxy(true, $"127.0.0.1:{XrayHttpPort}");
             }
             else
             {
-                // Режим "Только выбранные приложения"
                 _splitProxy = new SplitTunnelProxyServer(SplitRouterPort, XrayHttpPort, XraySocksPort, customAppList);
                 _splitProxy.Start();
-
                 SetSystemProxy(true, $"127.0.0.1:{SplitRouterPort}");
             }
         }
@@ -154,12 +154,9 @@ namespace gVPN
 
         public async Task<bool> VerifyConnectionAsync()
         {
-            await Task.Delay(2000);
-
-            for (int attempt = 1; attempt <= 4; attempt++)
+            for (int attempt = 1; attempt <= 3; attempt++)
             {
                 if (!IsRunning) return false;
-
                 try
                 {
                     using var handler = new HttpClientHandler
@@ -174,7 +171,7 @@ namespace gVPN
                 }
                 catch
                 {
-                    await Task.Delay(1000);
+                    await Task.Delay(600);
                 }
             }
             return false;
@@ -193,13 +190,27 @@ namespace gVPN
                         key.SetValue("ProxyServer", proxyServer, RegistryValueKind.String);
                         key.SetValue("ProxyOverride", "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*;<local>", RegistryValueKind.String);
                     }
-
                     InternetSetOption(IntPtr.Zero, INTERNET_OPTION_SETTINGS_CHANGED, IntPtr.Zero, 0);
                     InternetSetOption(IntPtr.Zero, INTERNET_OPTION_REFRESH, IntPtr.Zero, 0);
                 }
             }
             catch { }
         }
+
+        private static object[] BuildInbounds() => new object[]
+        {
+            new { tag = "socks-in", port = XraySocksPort, listen = "127.0.0.1", protocol = "socks", settings = new { auth = "noauth", udp = true } },
+            new { tag = "http-in", port = XrayHttpPort, listen = "127.0.0.1", protocol = "http" }
+        };
+
+        private static object BuildRouting(string outboundTag) => new
+        {
+            domainStrategy = "IPIfNonMatch",
+            rules = new[]
+            {
+                new { type = "field", inboundTag = new[] { "socks-in", "http-in" }, outboundTag }
+            }
+        };
 
         private string GenerateVlessConfig(string vlessUrl)
         {
@@ -212,7 +223,6 @@ namespace gVPN
             string network = (q["type"] ?? "tcp").ToLowerInvariant();
             string security = (q["security"] ?? "reality").ToLowerInvariant();
             string flow = q["flow"] ?? (security == "reality" && network == "tcp" ? "xtls-rprx-vision" : "");
-
             string fp = q["fp"] ?? "chrome";
             string sni = q["sni"] ?? "dl.google.com";
             string pbk = q["pbk"] ?? "";
@@ -224,24 +234,7 @@ namespace gVPN
             var config = new
             {
                 log = new { loglevel = "warning" },
-                inbounds = new object[]
-                {
-                    new
-                    {
-                        tag = "socks-in",
-                        port = XraySocksPort,
-                        listen = "127.0.0.1",
-                        protocol = "socks",
-                        settings = new { auth = "noauth", udp = true }
-                    },
-                    new
-                    {
-                        tag = "http-in",
-                        port = XrayHttpPort,
-                        listen = "127.0.0.1",
-                        protocol = "http"
-                    }
-                },
+                inbounds = BuildInbounds(),
                 outbounds = new object[]
                 {
                     new
@@ -258,12 +251,7 @@ namespace gVPN
                                     port = port,
                                     users = new[]
                                     {
-                                        new
-                                        {
-                                            id = uuid,
-                                            encryption = q["encryption"] ?? "none",
-                                            flow = flow
-                                        }
+                                        new { id = uuid, encryption = q["encryption"] ?? "none", flow = flow }
                                     }
                                 }
                             }
@@ -298,25 +286,9 @@ namespace gVPN
                             } : null
                         }
                     },
-                    new
-                    {
-                        tag = "direct",
-                        protocol = "freedom"
-                    }
+                    new { tag = "direct", protocol = "freedom" }
                 },
-                routing = new
-                {
-                    domainStrategy = "IPIfNonMatch",
-                    rules = new[]
-                    {
-                        new
-                        {
-                            type = "field",
-                            inboundTag = new[] { "socks-in", "http-in" },
-                            outboundTag = "proxy"
-                        }
-                    }
-                }
+                routing = BuildRouting("proxy")
             };
 
             return JsonSerializer.Serialize(config, new JsonSerializerOptions
@@ -324,6 +296,89 @@ namespace gVPN
                 WriteIndented = true,
                 DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
             });
+        }
+
+        private string GenerateTrojanConfig(string trojanUrl)
+        {
+            var uri = new Uri(trojanUrl.Trim());
+            string password = Uri.UnescapeDataString(uri.UserInfo);
+            string host = uri.Host;
+            int port = uri.Port > 0 ? uri.Port : 443;
+            var q = HttpUtility.ParseQueryString(uri.Query);
+
+            string network = (q["type"] ?? "tcp").ToLowerInvariant();
+            string sni = q["sni"] ?? host;
+            string fp = q["fp"] ?? "chrome";
+
+            var config = new
+            {
+                log = new { loglevel = "warning" },
+                inbounds = BuildInbounds(),
+                outbounds = new object[]
+                {
+                    new
+                    {
+                        tag = "proxy",
+                        protocol = "trojan",
+                        settings = new
+                        {
+                            servers = new[] { new { address = host, port = port, password = password } }
+                        },
+                        streamSettings = new
+                        {
+                            network = network,
+                            security = "tls",
+                            tlsSettings = new { serverName = sni, fingerprint = fp, allowInsecure = false },
+                            wsSettings = network == "ws" ? new { path = q["path"] ?? "/", headers = new { Host = q["host"] ?? sni } } : null
+                        }
+                    },
+                    new { tag = "direct", protocol = "freedom" }
+                },
+                routing = BuildRouting("proxy")
+            };
+
+            return JsonSerializer.Serialize(config, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            });
+        }
+
+        private string GenerateShadowsocksConfig(string ssUrl)
+        {
+            var uri = new Uri(ssUrl.Trim());
+            string userInfo = Uri.UnescapeDataString(uri.UserInfo);
+            if (!userInfo.Contains(':'))
+            {
+                string padded = userInfo.PadRight(userInfo.Length + (4 - userInfo.Length % 4) % 4, '=');
+                userInfo = Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+            }
+
+            int colon = userInfo.IndexOf(':');
+            string method = userInfo[..colon];
+            string password = userInfo[(colon + 1)..];
+
+            var config = new
+            {
+                log = new { loglevel = "warning" },
+                inbounds = BuildInbounds(),
+                outbounds = new object[]
+                {
+                    new
+                    {
+                        tag = "proxy",
+                        protocol = "shadowsocks",
+                        settings = new
+                        {
+                            servers = new[] { new { address = uri.Host, port = uri.Port, method = method, password = password } }
+                        }
+                    },
+                    new { tag = "direct", protocol = "freedom" }
+                },
+                routing = BuildRouting("proxy")
+            };
+
+            return JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         }
 
         private string GenerateWireGuardConfig(string conf)
@@ -336,7 +391,6 @@ namespace gVPN
             {
                 var l = rawLine.Trim();
                 if (l.StartsWith("#") || l.StartsWith("[") || !l.Contains('=')) continue;
-
                 int eq = l.IndexOf('=');
                 string k = l[..eq].Trim();
                 string v = l[(eq + 1)..].Trim();
@@ -377,24 +431,7 @@ namespace gVPN
             {
                 log = new { loglevel = "warning" },
                 dns = new { servers = new[] { "1.1.1.1", "8.8.8.8" } },
-                inbounds = new object[]
-                {
-                    new
-                    {
-                        tag = "socks-in",
-                        port = XraySocksPort,
-                        listen = "127.0.0.1",
-                        protocol = "socks",
-                        settings = new { auth = "noauth", udp = true }
-                    },
-                    new
-                    {
-                        tag = "http-in",
-                        port = XrayHttpPort,
-                        listen = "127.0.0.1",
-                        protocol = "http"
-                    }
-                },
+                inbounds = BuildInbounds(),
                 outbounds = new object[]
                 {
                     new
@@ -409,36 +446,15 @@ namespace gVPN
                             mtu = mtu
                         }
                     },
-                    new
-                    {
-                        tag = "direct",
-                        protocol = "freedom"
-                    }
+                    new { tag = "direct", protocol = "freedom" }
                 },
-                routing = new
-                {
-                    domainStrategy = "IPIfNonMatch",
-                    rules = new[]
-                    {
-                        new
-                        {
-                            type = "field",
-                            inboundTag = new[] { "socks-in", "http-in" },
-                            outboundTag = "wireguard-out"
-                        }
-                    }
-                }
+                routing = BuildRouting("wireguard-out")
             };
 
             return JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
         }
     }
 
-    /// <summary>
-    /// Локальный прокси-маршрутизатор для раздельного туннелирования (Split Tunneling).
-    /// Поддерживает IPv4 + IPv6, HTTP/CONNECT + SOCKS5, проверяет сам процесс и его родителя,
-    /// а также автоматически обновляет список .exe при изменении settings.json или из памяти MainWindow.
-    /// </summary>
     [SupportedOSPlatform("windows")]
     internal sealed class SplitTunnelProxyServer
     {
@@ -448,8 +464,6 @@ namespace gVPN
         private readonly HashSet<string> _allowedExeNames = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _allowedFullPaths = new(StringComparer.OrdinalIgnoreCase);
         private readonly object _lock = new();
-        private readonly string _logPath = Path.Combine(SettingsService.AppDataFolder, "split_tunnel.log");
-
         private TcpListener? _listener;
         private CancellationTokenSource? _cts;
         private DateTime _lastSettingsLoad = DateTime.MinValue;
@@ -459,17 +473,7 @@ namespace gVPN
             _listenPort = listenPort;
             _xrayHttpPort = xrayHttpPort;
             _xraySocksPort = xraySocksPort;
-
             ReloadAllowedApps(initialApps);
-        }
-
-        private void Log(string message)
-        {
-            try
-            {
-                File.AppendAllText(_logPath, $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
-            }
-            catch { }
         }
 
         private void ReloadAllowedApps(IEnumerable<string>? customApps = null)
@@ -487,72 +491,11 @@ namespace gVPN
                 if (customApps != null)
                     collected.AddRange(customApps);
 
-                // 1. Читаем из всех строковых массивов в settings.json
                 try
                 {
-                    string settingsFile = Path.Combine(SettingsService.AppDataFolder, "settings.json");
-                    if (File.Exists(settingsFile))
-                    {
-                        using var doc = JsonDocument.Parse(File.ReadAllText(settingsFile));
-                        if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                        {
-                            foreach (var prop in doc.RootElement.EnumerateObject())
-                            {
-                                if (prop.Value.ValueKind == JsonValueKind.Array)
-                                {
-                                    foreach (var item in prop.Value.EnumerateArray())
-                                    {
-                                        if (item.ValueKind == JsonValueKind.String)
-                                        {
-                                            string? s = item.GetString();
-                                            if (!string.IsNullOrWhiteSpace(s))
-                                                collected.Add(s);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                catch { }
-
-                // 2. Через Reflection дополнительно проверяем объект настроек и ListBox в открытом MainWindow
-                // (на случай если пользователь добавил .exe в список, но MainWindow ещё не вызвал SaveSettings)
-                try
-                {
-                    System.Windows.Application.Current?.Dispatcher?.Invoke(() =>
-                    {
-                        var mainWin = System.Windows.Application.Current.MainWindow;
-                        if (mainWin == null) return;
-
-                        var fields = mainWin.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-                        foreach (var f in fields)
-                        {
-                            object? val = f.GetValue(mainWin);
-                            if (val == null) continue;
-
-                            if (val is System.Windows.Controls.ItemsControl ic)
-                            {
-                                foreach (var item in ic.Items)
-                                {
-                                    if (item is string strItem && strItem.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
-                                        collected.Add(strItem);
-                                }
-                            }
-                            else if (val is IEnumerable<string> strList)
-                            {
-                                collected.AddRange(strList);
-                            }
-                            else if (val.GetType().Name.Contains("Settings", StringComparison.OrdinalIgnoreCase))
-                            {
-                                foreach (var prop in val.GetType().GetProperties())
-                                {
-                                    if (prop.GetValue(val) is IEnumerable<string> pList)
-                                        collected.AddRange(pList);
-                                }
-                            }
-                        }
-                    });
+                    var settings = SettingsService.LoadSettings();
+                    if (settings.TargetAppPaths != null)
+                        collected.AddRange(settings.TargetAppPaths);
                 }
                 catch { }
 
@@ -576,15 +519,10 @@ namespace gVPN
 
         public void Start()
         {
-            try { if (File.Exists(_logPath)) File.Delete(_logPath); } catch { }
-
             _cts = new CancellationTokenSource();
-            // Поддержка одновременно IPv4 (127.0.0.1) и IPv6 ([::1])
             _listener = new TcpListener(IPAddress.IPv6Any, _listenPort);
             _listener.Server.DualMode = true;
             _listener.Start();
-
-            Log($"SplitTunnel запущен на порту {_listenPort}. Выбранные приложения: {string.Join(", ", _allowedExeNames)}");
             _ = AcceptLoopAsync(_cts.Token);
         }
 
@@ -617,14 +555,10 @@ namespace gVPN
                     if (client.Client.RemoteEndPoint is not IPEndPoint clientEp)
                         return;
 
-                    // Обновляем список приложений не чаще раза в 2 секунды
                     ReloadAllowedApps();
-
-                    bool routeViaVpn = ShouldRoutePortViaVpn(clientEp.Port, out string procInfo);
+                    bool routeViaVpn = ShouldRoutePortViaVpn(clientEp.Port);
 
                     using NetworkStream clientStream = client.GetStream();
-
-                    // Читаем первый байт, чтобы понять протокол (SOCKS5 = 0x05, иначе HTTP/CONNECT)
                     byte[] firstByte = new byte[1];
                     int readFirst = await clientStream.ReadAsync(firstByte.AsMemory(0, 1), ct);
                     if (readFirst <= 0) return;
@@ -633,26 +567,19 @@ namespace gVPN
 
                     if (routeViaVpn)
                     {
-                        Log($"[VPN] {procInfo} (порт {clientEp.Port}) -> через туннель Xray");
                         int targetXrayPort = isSocks5 ? _xraySocksPort : _xrayHttpPort;
-
                         using TcpClient xrayClient = new();
                         await xrayClient.ConnectAsync(IPAddress.Loopback, targetXrayPort, ct);
                         using NetworkStream xrayStream = xrayClient.GetStream();
-
                         await xrayStream.WriteAsync(firstByte.AsMemory(0, 1), ct);
                         await RelayBidirectionalAsync(clientStream, xrayStream, ct);
                     }
                     else
                     {
                         if (!isSocks5)
-                        {
                             await HandleDirectHttpProxyAsync(clientStream, firstByte[0], ct);
-                        }
                         else
-                        {
                             await HandleDirectSocks5ProxyAsync(clientStream, ct);
-                        }
                     }
                 }
                 catch { }
@@ -661,34 +588,31 @@ namespace gVPN
 
         private async Task HandleDirectSocks5ProxyAsync(NetworkStream clientStream, CancellationToken ct)
         {
-            // Читаем количество методов аутентификации (первый байт 0x05 уже прочитан)
             byte[] buf = new byte[260];
             if (await clientStream.ReadAsync(buf.AsMemory(0, 1), ct) <= 0) return;
             int nMethods = buf[0];
             if (await ReadExactAsync(clientStream, buf, nMethods, ct) < nMethods) return;
 
-            // Отвечаем: без аутентификации (0x05 0x00)
             await clientStream.WriteAsync(new byte[] { 0x05, 0x00 }, ct);
 
-            // Читаем заголовок запроса: VER CMD RSV ATYP
             if (await ReadExactAsync(clientStream, buf, 4, ct) < 4) return;
-            if (buf[1] != 0x01) return; // Поддерживаем CONNECT (0x01)
+            if (buf[1] != 0x01) return;
 
             string host;
             int atyp = buf[3];
-            if (atyp == 0x01) // IPv4
+            if (atyp == 0x01)
             {
                 if (await ReadExactAsync(clientStream, buf, 4, ct) < 4) return;
                 host = new IPAddress(buf.AsSpan(0, 4)).ToString();
             }
-            else if (atyp == 0x03) // Domain
+            else if (atyp == 0x03)
             {
                 if (await ReadExactAsync(clientStream, buf, 1, ct) < 1) return;
                 int len = buf[0];
                 if (await ReadExactAsync(clientStream, buf, len, ct) < len) return;
                 host = Encoding.ASCII.GetString(buf, 0, len);
             }
-            else if (atyp == 0x04) // IPv6
+            else if (atyp == 0x04)
             {
                 if (await ReadExactAsync(clientStream, buf, 16, ct) < 16) return;
                 host = new IPAddress(buf.AsSpan(0, 16)).ToString();
@@ -704,7 +628,6 @@ namespace gVPN
 
             byte[] reply = { 0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0 };
             await clientStream.WriteAsync(reply, ct);
-
             await RelayBidirectionalAsync(clientStream, directStream, ct);
         }
 
@@ -734,7 +657,6 @@ namespace gVPN
                     int read = await clientStream.ReadAsync(headerBuf.AsMemory(totalRead, headerBuf.Length - totalRead), ct);
                     if (read <= 0) return;
                     totalRead += read;
-
                     headerEnd = FindHeaderEnd(headerBuf, totalRead);
                     if (headerEnd >= 0) break;
                 }
@@ -791,7 +713,6 @@ namespace gVPN
 
                     string relativeFirstLine = $"{method} {uri.PathAndQuery} {(firstLineParts.Length > 2 ? firstLineParts[2] : "HTTP/1.1")}\r\n";
                     string restHeaders = string.Join("\r\n", lines.Skip(1).Where(l => !l.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))) + "\r\n\r\n";
-
                     byte[] rebuiltHeader = Encoding.ASCII.GetBytes(relativeFirstLine + restHeaders);
                     await directStream.WriteAsync(rebuiltHeader, ct);
 
@@ -820,25 +741,24 @@ namespace gVPN
 
         private static async Task RelayBidirectionalAsync(Stream s1, Stream s2, CancellationToken ct)
         {
-            var t1 = s1.CopyToAsync(s2, ct);
-            var t2 = s2.CopyToAsync(s1, ct);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var t1 = s1.CopyToAsync(s2, linkedCts.Token);
+            var t2 = s2.CopyToAsync(s1, linkedCts.Token);
             await Task.WhenAny(t1, t2);
+            linkedCts.Cancel();
+            try { s1.Close(); } catch { }
+            try { s2.Close(); } catch { }
         }
 
-        private bool ShouldRoutePortViaVpn(int clientLocalPort, out string procInfo)
+        private bool ShouldRoutePortViaVpn(int clientLocalPort)
         {
-            procInfo = "unknown";
-
             int pid = GetProcessIdByLocalPort(clientLocalPort);
             if (pid <= 0) return false;
-
-            // Проверяем сам процесс и его родительский процесс (для многопроцессных браузеров/приложений)
-            return IsPidAllowed(pid, out procInfo) || IsParentPidAllowed(pid, out procInfo);
+            return IsPidAllowed(pid) || IsParentPidAllowed(pid);
         }
 
-        private bool IsPidAllowed(int pid, out string procInfo)
+        private bool IsPidAllowed(int pid)
         {
-            procInfo = $"PID:{pid}";
             if (pid <= 4) return false;
 
             string? fullPath = TryGetProcessPath(pid);
@@ -856,8 +776,6 @@ namespace gVPN
                 catch { }
             }
 
-            procInfo = $"{exeName ?? "unknown"} (PID:{pid})";
-
             lock (_lock)
             {
                 if (!string.IsNullOrEmpty(fullPath) && _allowedFullPaths.Contains(fullPath))
@@ -867,19 +785,16 @@ namespace gVPN
                 if (!string.IsNullOrEmpty(exeNoExt) && _allowedExeNames.Contains(exeNoExt))
                     return true;
             }
-
             return false;
         }
 
-        private bool IsParentPidAllowed(int childPid, out string parentInfo)
+        private bool IsParentPidAllowed(int childPid)
         {
-            parentInfo = "";
             int parentPid = GetParentProcessId(childPid);
             if (parentPid <= 4 || parentPid == childPid) return false;
-            return IsPidAllowed(parentPid, out parentInfo);
+            return IsPidAllowed(parentPid);
         }
 
-        // --- WinAPI: Определение PID (IPv4 + IPv6) и родительского PID ---
         private const int AF_INET = 2;
         private const int AF_INET6 = 23;
         private const int TCP_TABLE_OWNER_PID_CONNECTIONS = 4;
@@ -935,10 +850,7 @@ namespace gVPN
                 int size = sb.Capacity;
                 return QueryFullProcessImageName(hProc, 0, sb, ref size) ? sb.ToString() : null;
             }
-            finally
-            {
-                CloseHandle(hProc);
-            }
+            finally { CloseHandle(hProc); }
         }
 
         private static int GetProcessIdByLocalPort(int localPort)
@@ -962,22 +874,16 @@ namespace gVPN
 
                 int rowCount = Marshal.ReadInt32(tcpTablePtr);
                 IntPtr rowPtr = IntPtr.Add(tcpTablePtr, 4);
-
                 for (int i = 0; i < rowCount; i++)
                 {
                     int rawLocalPort = Marshal.ReadInt32(rowPtr, 8);
                     int port = ((rawLocalPort & 0xFF) << 8) | ((rawLocalPort >> 8) & 0xFF);
-
                     if (port == localPort)
                         return Marshal.ReadInt32(rowPtr, 20);
-
                     rowPtr = IntPtr.Add(rowPtr, 24);
                 }
             }
-            finally
-            {
-                Marshal.FreeHGlobal(tcpTablePtr);
-            }
+            finally { Marshal.FreeHGlobal(tcpTablePtr); }
             return -1;
         }
 
@@ -995,31 +901,16 @@ namespace gVPN
 
                 int rowCount = Marshal.ReadInt32(tcpTablePtr);
                 IntPtr rowPtr = IntPtr.Add(tcpTablePtr, 4);
-
-                // Структура MIB_TCP6ROW_OWNER_PID (56 байт):
-                // 0..15: ucLocalAddr (16)
-                // 16..19: dwLocalScopeId (4)
-                // 20..23: dwLocalPort (4)
-                // 24..39: ucRemoteAddr (16)
-                // 40..43: dwRemoteScopeId (4)
-                // 44..47: dwRemotePort (4)
-                // 48..51: dwState (4)
-                // 52..55: dwOwningPid (4)
                 for (int i = 0; i < rowCount; i++)
                 {
                     int rawLocalPort = Marshal.ReadInt32(rowPtr, 20);
                     int port = ((rawLocalPort & 0xFF) << 8) | ((rawLocalPort >> 8) & 0xFF);
-
                     if (port == localPort)
                         return Marshal.ReadInt32(rowPtr, 52);
-
                     rowPtr = IntPtr.Add(rowPtr, 56);
                 }
             }
-            finally
-            {
-                Marshal.FreeHGlobal(tcpTablePtr);
-            }
+            finally { Marshal.FreeHGlobal(tcpTablePtr); }
             return -1;
         }
     }

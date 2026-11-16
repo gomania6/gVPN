@@ -16,6 +16,7 @@ namespace gVPN
 
         private static readonly string StoragePath = Path.Combine(AppDataFolder, "servers.json");
         private static readonly string SettingsPath = Path.Combine(AppDataFolder, "settings.json");
+
         private static readonly JsonSerializerOptions JsonOpts = new()
         {
             WriteIndented = true,
@@ -67,14 +68,16 @@ namespace gVPN
             return new();
         }
 
-        public static void SaveSettings(AppSettings settings)
+        public static void SaveSettings(AppSettings settings, bool updateAutoStartTask = false)
         {
             try
             {
                 EnsureDirectoryCreated();
                 string json = JsonSerializer.Serialize(settings, JsonOpts);
                 File.WriteAllText(SettingsPath, json);
-                ApplyWindowsAutoStart(settings.AutoStartApp);
+
+                if (updateAutoStartTask)
+                    ApplyWindowsAutoStart(settings.AutoStartApp);
             }
             catch { }
         }
@@ -86,14 +89,12 @@ namespace gVPN
                 string? appPath = Environment.ProcessPath;
                 if (string.IsNullOrEmpty(appPath)) return;
 
-                // Очищаем старую запись в реестре Run (т.к. с requireAdministrator в манифесте Windows блокирует Run)
                 using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run", true))
                 {
                     if (key?.GetValue("gVPN") != null)
                         key.DeleteValue("gVPN", false);
                 }
 
-                // Настраиваем Планировщик задач с наивысшими правами (/RL HIGHEST), чтобы приложение с правами админа стартовало без ошибок
                 string args = enable
                     ? $"/Create /F /RL HIGHEST /SC ONLOGON /TN \"gVPN_AutoStart\" /TR \"\\\"{appPath}\\\" --autostart\""
                     : "/Delete /F /TN \"gVPN_AutoStart\"";

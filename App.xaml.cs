@@ -14,9 +14,12 @@ namespace gVPN
     {
         private const string MutexName = "Global\\gVPN_SingleInstance_Mutex";
         private const string ShowEventName = "Global\\gVPN_ShowWindow_Event";
+        private const string ConnectEventName = "Global\\gVPN_Connect_Event";
 
         private Mutex? _instanceMutex;
         private EventWaitHandle? _showWindowEvent;
+        private EventWaitHandle? _connectEvent;
+        private bool _ownsMutex;
 
         [DllImport("wininet.dll", SetLastError = true)]
         private static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
@@ -24,11 +27,21 @@ namespace gVPN
         protected override void OnStartup(StartupEventArgs e)
         {
             _instanceMutex = new Mutex(true, MutexName, out bool isNewInstance);
+            _ownsMutex = isNewInstance;
             _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+            _connectEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ConnectEventName);
+
+            bool hasAutoStart = e.Args.Any(a => a.Equals("--autostart", StringComparison.OrdinalIgnoreCase));
+            bool hasMinimized = e.Args.Any(a => a.Equals("--minimized", StringComparison.OrdinalIgnoreCase));
+            bool hasConnect = e.Args.Any(a => a.Equals("--connect", StringComparison.OrdinalIgnoreCase));
 
             if (!isNewInstance)
             {
-                _showWindowEvent.Set();
+                if (hasConnect)
+                    _connectEvent.Set();
+                else
+                    _showWindowEvent.Set();
+
                 Shutdown();
                 return;
             }
@@ -39,14 +52,13 @@ namespace gVPN
             CleanupStaleSystemProxy();
 
             var settings = SettingsService.LoadSettings();
-            bool hasAutoStart = e.Args.Any(a => a.Equals("--autostart", StringComparison.OrdinalIgnoreCase));
 
-            var mainWindow = new MainWindow();
+            var mainWindow = new MainWindow(connectOnStartup: hasConnect);
             this.MainWindow = mainWindow;
 
-            ListenForShowSignal(mainWindow);
+            ListenForIpcSignals(mainWindow);
 
-            if (settings.StartMinimized || hasAutoStart)
+            if (settings.StartMinimized || hasAutoStart || hasMinimized)
             {
                 mainWindow.WindowState = WindowState.Minimized;
                 mainWindow.ShowInTaskbar = false;
@@ -59,17 +71,25 @@ namespace gVPN
             }
         }
 
-        private void ListenForShowSignal(MainWindow mainWindow)
+        private void ListenForIpcSignals(MainWindow mainWindow)
         {
             Task.Run(() =>
             {
-                while (_showWindowEvent != null)
+                if (_showWindowEvent == null || _connectEvent == null) return;
+                WaitHandle[] handles = { _showWindowEvent, _connectEvent };
+
+                while (true)
                 {
                     try
                     {
-                        if (_showWindowEvent.WaitOne())
+                        int signaled = WaitHandle.WaitAny(handles);
+                        if (signaled == 0)
                         {
                             Dispatcher.Invoke(() => mainWindow.RestoreFromTray());
+                        }
+                        else if (signaled == 1)
+                        {
+                            Dispatcher.Invoke(() => mainWindow.TriggerConnect());
                         }
                     }
                     catch
@@ -93,9 +113,7 @@ namespace gVPN
 
                 if (proxyEnabled == 1 && (string.IsNullOrEmpty(currentProxy) || currentProxy.StartsWith("127.0.0.1:108")))
                 {
-                    key.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
-                    InternetSetOption(IntPtr.Zero, 39, IntPtr.Zero, 0);
-                    InternetSetOption(IntPtr.Zero, 37, IntPtr.Zero, 0);
+                    XrayService.DisableSystemProxy();
                 }
             }
             catch { }
@@ -103,12 +121,18 @@ namespace gVPN
 
         protected override void OnExit(ExitEventArgs e)
         {
+            PulseGuardService.WriteStatus(
+                PulseGuardState.Disconnected,
+                (this.MainWindow as MainWindow)?.CurrentProfileForStatus);
+
             CleanupStaleSystemProxy();
 
             try
             {
                 _showWindowEvent?.Dispose();
-                _instanceMutex?.ReleaseMutex();
+                _connectEvent?.Dispose();
+                if (_ownsMutex)
+                    _instanceMutex?.ReleaseMutex();
                 _instanceMutex?.Dispose();
             }
             catch { }

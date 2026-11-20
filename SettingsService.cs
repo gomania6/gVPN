@@ -23,6 +23,12 @@ namespace gVPN
             PropertyNameCaseInsensitive = true
         };
 
+        public static DateTime GetSettingsFileStamp()
+        {
+            try { return File.Exists(SettingsPath) ? File.GetLastWriteTimeUtc(SettingsPath) : DateTime.MinValue; }
+            catch { return DateTime.MinValue; }
+        }
+
         public static void EnsureDirectoryCreated()
         {
             if (!Directory.Exists(AppDataFolder))

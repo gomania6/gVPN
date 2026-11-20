@@ -31,8 +31,13 @@ namespace gVPN
         private ObservableCollection<string> _targetApps = new();
         private AppSettings _settings = new();
         private VpnProfile? _activeProfile;
+        private VpnProfile? _renamingProfile;
+        private bool _isPinging = false;
+        private VpnProfile? _lastAddedProfile;
+        private readonly DispatcherTimer _autoPingTimer;
         private bool _isConnected = false;
         private bool _isLoadingSettings = false;
+        private readonly bool _connectOnStartup;
         private readonly DispatcherTimer _speedTimer;
         private NetworkInterface[]? _cachedInterfaces;
         private long _lastBytesReceived = 0;
@@ -43,12 +48,17 @@ namespace gVPN
         private MenuItem? _trayStatusItem;
         private MenuItem? _traySpeedItem;
         private MenuItem? _trayConnectItem;
+        private MenuItem? _trayOpenItem;
+        private MenuItem? _trayExitItem;
 
         [DllImport("kernel32.dll")]
         private static extern bool SetProcessWorkingSetSize(IntPtr proc, int min, int max);
 
-        public MainWindow()
+        public VpnProfile? CurrentProfileForStatus => _activeProfile ?? LstServers.SelectedItem as VpnProfile;
+
+        public MainWindow(bool connectOnStartup = false)
         {
+            _connectOnStartup = connectOnStartup;
             string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);
             if (!string.IsNullOrEmpty(exeDir))
                 Directory.SetCurrentDirectory(exeDir);
@@ -62,19 +72,32 @@ namespace gVPN
             _profiles = new ObservableCollection<VpnProfile>(SettingsService.LoadProfiles());
             LstServers.ItemsSource = _profiles;
             LoadSettingsUi();
+            PulseGuardService.WriteStatus(PulseGuardState.Disconnected, LstServers.SelectedItem as VpnProfile);
 
             _speedTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
             _speedTimer.Tick += SpeedTimer_Tick;
+            _autoPingTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+            _autoPingTimer.Tick += AutoPingTimer_Tick;
+            _autoPingTimer.Start();
             this.Loaded += MainWindow_Loaded;
+        }
+
+        public void TriggerConnect()
+        {
+            if (!_isConnected && BtnConnect.IsEnabled && LstServers.SelectedItem is VpnProfile)
+            {
+                BtnConnect_Click(BtnConnect, new RoutedEventArgs());
+            }
         }
 
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            _ = RunPingAllAsync();
             TrimMemory();
-            if (_settings.AutoStartConnect && LstServers.SelectedItem != null && !_isConnected)
+            if ((_settings.AutoStartConnect || _connectOnStartup) && LstServers.SelectedItem != null && !_isConnected)
             {
                 await Task.Delay(800);
-                BtnConnect_Click(BtnConnect, new RoutedEventArgs());
+                TriggerConnect();
             }
         }
 
@@ -117,30 +140,38 @@ namespace gVPN
             _trayConnectItem = new MenuItem { Header = "Подключить", Style = (Style)FindResource("TrayMenuItemStyle") };
             _trayConnectItem.Click += (s, e) => BtnConnect_Click(BtnConnect, new RoutedEventArgs());
 
-            var showItem = new MenuItem { Header = "Открыть gVPN", Style = (Style)FindResource("TrayMenuItemStyle") };
-            showItem.Click += (s, e) => RestoreFromTray();
+            _trayOpenItem = new MenuItem { Header = "Открыть gVPN", Style = (Style)FindResource("TrayMenuItemStyle") };
+            _trayOpenItem.Click += (s, e) => RestoreFromTray();
 
-            var exitItem = new MenuItem
+            _trayExitItem = new MenuItem
             {
                 Header = "Выйти из gVPN",
                 Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F38BA8")),
                 Style = (Style)FindResource("TrayMenuItemStyle")
             };
-            exitItem.Click += (s, e) => { _isRealExit = true; this.Close(); };
+            _trayExitItem.Click += (s, e) => { _isRealExit = true; this.Close(); };
 
             _trayMenu.Items.Add(_trayStatusItem);
             _trayMenu.Items.Add(_traySpeedItem);
             _trayMenu.Items.Add(new Separator { Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#313244")) });
             _trayMenu.Items.Add(_trayConnectItem);
-            _trayMenu.Items.Add(showItem);
+            _trayMenu.Items.Add(_trayOpenItem);
             _trayMenu.Items.Add(new Separator { Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#313244")) });
-            _trayMenu.Items.Add(exitItem);
+            _trayMenu.Items.Add(_trayExitItem);
 
             _notifyIcon.MouseClick += (s, e) =>
             {
                 if (e.Button == MouseButtons.Left) RestoreFromTray();
                 else if (e.Button == MouseButtons.Right) _trayMenu.IsOpen = true;
             };
+        }
+
+        public void UpdateTrayLocalization(LocalizedStrings s, bool isConnected, string? profileName)
+        {
+            if (_trayConnectItem != null) _trayConnectItem.Header = isConnected ? s.Disconnect : s.Connect;
+            if (_trayStatusItem != null) _trayStatusItem.Header = isConnected ? $"gVPN: {profileName}" : s.TrayStatusDisconnected;
+            if (_trayOpenItem != null) _trayOpenItem.Header = s.TrayOpen;
+            if (_trayExitItem != null) _trayExitItem.Header = s.TrayExit;
         }
 
         public void RestoreFromTray()
@@ -181,7 +212,10 @@ namespace gVPN
             }
             else
             {
+                PulseGuardService.WriteStatus(PulseGuardState.Disconnected, CurrentProfileForStatus);
                 _xrayService.Stop();
+                _speedTimer.Stop();
+                _autoPingTimer.Stop();
                 if (_notifyIcon != null) { _notifyIcon.Visible = false; _notifyIcon.Dispose(); }
             }
         }
@@ -207,7 +241,7 @@ namespace gVPN
             PnlMainView.Visibility = Visibility.Collapsed;
             PnlSettingsView.Visibility = Visibility.Visible;
             BtnSettings.Content = "\uE72B";
-            TxtHeaderTitle.Text = _settings.Language == "en" ? "Settings" : (_settings.Language == "pl" ? "Ustawienia" : "Настройки");
+            TxtHeaderTitle.Text = LocalizationService.GetStrings(_settings.Language).SettingsTitle;
         }
 
         // ================= НАСТРОЙКИ =================
@@ -384,10 +418,35 @@ namespace gVPN
                 }
                 else
                 {
-                    foreach (var line in input.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                    string textToParse = XrayService.TryDecodeSubscriptionBase64(input, out string decodedText)
+                        ? decodedText
+                        : input;
+
+                    if (textToParse.Contains("[Interface]", StringComparison.OrdinalIgnoreCase) &&
+                        !textToParse.Contains("vless://", StringComparison.OrdinalIgnoreCase) &&
+                        !textToParse.Contains("trojan://", StringComparison.OrdinalIgnoreCase) &&
+                        !textToParse.Contains("ss://", StringComparison.OrdinalIgnoreCase))
                     {
-                        ParseAndAddLine(line.Trim());
+                        var p = new VpnProfile { Name = $"WireGuard #{_profiles.Count + 1}", Type = "wireguard", RawData = textToParse };
+                        _profiles.Add(p);
+                        SettingsService.SaveProfiles(_profiles);
+                        LstServers.SelectedItem = p;
                     }
+                    else
+                    {
+                        foreach (var line in textToParse.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            ParseAndAddLine(line.Trim());
+                        }
+                    }
+                }
+
+                if (_lastAddedProfile != null)
+                {
+                    // Одна запись на диск и один выбор элемента вместо N
+                    SettingsService.SaveProfiles(_profiles);
+                    LstServers.SelectedItem = _lastAddedProfile;
+                    _lastAddedProfile = null;
                 }
 
                 TxtInput.Clear();
@@ -422,8 +481,122 @@ namespace gVPN
 
             var p = new VpnProfile { Name = name, Type = type, RawData = url };
             _profiles.Add(p);
-            SettingsService.SaveProfiles(_profiles);
-            LstServers.SelectedItem = p;
+            _lastAddedProfile = p;
+        }
+
+        private async void BtnPingAll_Click(object sender, RoutedEventArgs e)
+        {
+            await RunPingAllAsync();
+        }
+
+        private async void AutoPingTimer_Tick(object? sender, EventArgs e)
+        {
+            // Не пингуем, пока окно скрыто в трей
+            if (!this.IsVisible || this.WindowState == WindowState.Minimized) return;
+            await RunPingAllAsync();
+        }
+
+        private async Task RunPingAllAsync()
+        {
+            if (_isPinging || _profiles.Count == 0) return;
+            _isPinging = true;
+
+            BtnPingAll.IsEnabled = false;
+            var loc = LocalizationService.GetStrings(_settings.Language);
+            using var semaphore = new System.Threading.SemaphoreSlim(5);
+
+            try
+            {
+                var tasks = _profiles.ToList().Select(async profile =>
+                {
+                    profile.LatencyColor = "#A6ADC8";
+                    profile.LatencyText = "...";
+
+                    await semaphore.WaitAsync();
+                    try
+                    {
+                        long? ms = await XrayService.MeasureProfileLatencyAsync(profile);
+                        if (ms.HasValue)
+                        {
+                            profile.LatencyText = $"{ms.Value} ms";
+                            profile.LatencyColor = ms.Value < 150 ? "#A6E3A1" : (ms.Value < 350 ? "#F9E2AF" : "#F38BA8");
+                        }
+                        else
+                        {
+                            profile.LatencyText = loc.PingTimeout;
+                            profile.LatencyColor = "#F38BA8";
+                        }
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                });
+
+                await Task.WhenAll(tasks);
+            }
+            catch { }
+            finally
+            {
+                BtnPingAll.IsEnabled = true;
+                _isPinging = false;
+            }
+        }
+
+        private void BtnRenameServer_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement el && el.DataContext is VpnProfile p)
+            {
+                _renamingProfile = p;
+                TxtRename.Text = p.Name;
+                PnlRenameServer.Visibility = Visibility.Visible;
+                TxtRename.Focus();
+                TxtRename.SelectAll();
+            }
+        }
+
+        private void BtnSaveRename_Click(object sender, RoutedEventArgs e)
+        {
+            if (_renamingProfile != null)
+            {
+                string newName = TxtRename.Text.Trim();
+                if (!string.IsNullOrWhiteSpace(newName))
+                {
+                    _renamingProfile.Name = newName;
+                    SettingsService.SaveProfiles(_profiles);
+                    if (_isConnected && _activeProfile?.Id == _renamingProfile.Id)
+                    {
+                        LocalizationService.UpdateUi(this, _settings.Language, true, newName);
+                        PulseGuardService.WriteStatus(PulseGuardState.Connected, _activeProfile);
+                    }
+                    else if (!_isConnected && LstServers.SelectedItem is VpnProfile sel && sel.Id == _renamingProfile.Id)
+                    {
+                        PulseGuardService.WriteStatus(PulseGuardState.Disconnected, sel);
+                    }
+                }
+            }
+            _renamingProfile = null;
+            PnlRenameServer.Visibility = Visibility.Collapsed;
+        }
+
+        private void BtnCancelRename_Click(object sender, RoutedEventArgs e)
+        {
+            _renamingProfile = null;
+            PnlRenameServer.Visibility = Visibility.Collapsed;
+        }
+
+        private void TxtRename_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        {
+            if (e.Key == System.Windows.Input.Key.Enter)
+            {
+                BtnSaveRename_Click(sender, e);
+                e.Handled = true;
+            }
+            else if (e.Key == System.Windows.Input.Key.Escape)
+            {
+                BtnCancelRename_Click(sender, e);
+                e.Handled = true;
+            }
         }
 
         private void BtnDeleteServer_Click(object sender, RoutedEventArgs e)
@@ -431,6 +604,11 @@ namespace gVPN
             if (_isConnected) return;
             if (sender is FrameworkElement el && el.DataContext is VpnProfile p)
             {
+                if (_renamingProfile?.Id == p.Id)
+                {
+                    _renamingProfile = null;
+                    PnlRenameServer.Visibility = Visibility.Collapsed;
+                }
                 _profiles.Remove(p);
                 SettingsService.SaveProfiles(_profiles);
                 if (_profiles.Count > 0) LstServers.SelectedIndex = 0;
@@ -443,15 +621,18 @@ namespace gVPN
 
             if (LstServers.SelectedItem is VpnProfile p)
             {
-                TxtStatus.Text = $"Выбран: {p.Name} ({p.Type.ToUpper()})";
+                var s = LocalizationService.GetStrings(_settings.Language);
+                TxtStatus.Text = string.Format(s.StatusSelectedFormat, p.Name, p.Type.ToUpper());
                 _settings.LastSelectedProfileId = p.Id;
                 SaveSettingsFromUi(updateAutoStartTask: false);
+                PulseGuardService.WriteStatus(PulseGuardState.Disconnected, p);
             }
         }
 
         // ================= ПОДКЛЮЧЕНИЕ =================
         private async void BtnConnect_Click(object sender, RoutedEventArgs e)
         {
+            var loc = LocalizationService.GetStrings(_settings.Language);
             if (!_isConnected)
             {
                 if (LstServers.SelectedItem is not VpnProfile p) return;
@@ -459,7 +640,7 @@ namespace gVPN
                 _activeProfile = p;
                 BtnConnect.IsEnabled = false;
                 LstServers.IsEnabled = false;
-                TxtStatus.Text = "Подключение и проверка связи...";
+                TxtStatus.Text = loc.StatusConnecting;
                 TxtStatus.Foreground = System.Windows.Media.Brushes.Orange;
                 StatusDot.Background = System.Windows.Media.Brushes.Orange;
 
@@ -469,21 +650,26 @@ namespace gVPN
                     await Task.Delay(800);
 
                     if (!_xrayService.IsRunning)
-                        throw new Exception("Ядро xray.exe завершило работу. Проверьте корректность ключа.");
+                    {
+                        string log = _xrayService.GetLastErrorLog();
+                        string msg = string.IsNullOrWhiteSpace(log)
+                            ? loc.XrayExitedError
+                            : $"{loc.XrayExitedError}\n\n{log}";
+                        throw new Exception(msg);
+                    }
 
                     bool reachable = await _xrayService.VerifyConnectionAsync();
                     if (!reachable)
-                        throw new Exception("Нет ответа от удалённого сервера (таймаут проверки).");
+                        throw new Exception(loc.ServerTimeoutError);
 
                     _isConnected = true;
-                    BtnConnect.Content = _settings.Language == "en" ? "Disconnect" : (_settings.Language == "pl" ? "Rozłącz" : "Отключить");
+                    BtnConnect.Content = loc.Disconnect;
                     BtnConnect.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F38BA8"));
-                    TxtStatus.Text = $"Подключено: {p.Name}";
+                    TxtStatus.Text = string.Format(loc.StatusConnectedFormat, p.Name);
                     TxtStatus.Foreground = System.Windows.Media.Brushes.LightGreen;
                     StatusDot.Background = System.Windows.Media.Brushes.LightGreen;
 
-                    if (_trayConnectItem != null) _trayConnectItem.Header = "Отключить";
-                    if (_trayStatusItem != null) _trayStatusItem.Header = $"gVPN: {p.Name}";
+                    UpdateTrayLocalization(loc, true, p.Name);
                     if (_traySpeedItem != null) _traySpeedItem.Visibility = Visibility.Visible;
 
                     _cachedInterfaces = NetworkInterface.GetAllNetworkInterfaces();
@@ -491,6 +677,8 @@ namespace gVPN
                     _lastBytesSent = 0;
                     PnlSpeed.Visibility = Visibility.Visible;
                     _speedTimer.Start();
+                    PulseGuardService.WriteStatus(PulseGuardState.Connected, p);
+                    PulseGuardService.RefreshExternalIpAsync(p, () => _isConnected && _activeProfile?.Id == p.Id);
                     TrimMemory();
                 }
                 catch (Exception ex)
@@ -498,10 +686,11 @@ namespace gVPN
                     _xrayService.Stop();
                     _activeProfile = null;
                     LstServers.IsEnabled = true;
-                    TxtStatus.Text = "Ошибка подключения";
+                    TxtStatus.Text = loc.StatusError;
                     TxtStatus.Foreground = System.Windows.Media.Brushes.IndianRed;
                     StatusDot.Background = System.Windows.Media.Brushes.IndianRed;
-                    MessageBox.Show(ex.Message, "Ошибка VPN", MessageBoxButton.OK, MessageBoxImage.Error);
+                    PulseGuardService.WriteStatus(PulseGuardState.Error, p);
+                    MessageBox.Show(ex.Message, loc.VpnErrorTitle, MessageBoxButton.OK, MessageBoxImage.Error);
                 }
                 finally
                 {
@@ -517,21 +706,51 @@ namespace gVPN
                 LstServers.IsEnabled = true;
                 PnlSpeed.Visibility = Visibility.Collapsed;
 
-                BtnConnect.Content = _settings.Language == "en" ? "Connect" : (_settings.Language == "pl" ? "Połącz" : "Подключить");
+                BtnConnect.Content = loc.Connect;
                 BtnConnect.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#89B4FA"));
-                TxtStatus.Text = "Статус: Отключено";
+                TxtStatus.Text = loc.StatusDisconnected;
                 TxtStatus.Foreground = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#BAC2DE"));
                 StatusDot.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#89B4FA"));
 
-                if (_trayConnectItem != null) _trayConnectItem.Header = "Подключить";
-                if (_trayStatusItem != null) _trayStatusItem.Header = "gVPN: Отключено";
+                UpdateTrayLocalization(loc, false, null);
                 if (_traySpeedItem != null) _traySpeedItem.Visibility = Visibility.Collapsed;
+                PulseGuardService.WriteStatus(PulseGuardState.Disconnected, LstServers.SelectedItem as VpnProfile);
                 TrimMemory();
             }
         }
 
+        private void HandleConnectionDropped()
+        {
+            var droppedProfile = _activeProfile;
+            var loc = LocalizationService.GetStrings(_settings.Language);
+
+            _xrayService.Stop();
+            _speedTimer.Stop();
+            _isConnected = false;
+            _activeProfile = null;
+            LstServers.IsEnabled = true;
+            PnlSpeed.Visibility = Visibility.Collapsed;
+
+            BtnConnect.Content = loc.Connect;
+            BtnConnect.Background = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#89B4FA"));
+            TxtStatus.Text = loc.StatusError;
+            TxtStatus.Foreground = System.Windows.Media.Brushes.IndianRed;
+            StatusDot.Background = System.Windows.Media.Brushes.IndianRed;
+
+            UpdateTrayLocalization(loc, false, null);
+            if (_traySpeedItem != null) _traySpeedItem.Visibility = Visibility.Collapsed;
+            PulseGuardService.WriteStatus(PulseGuardState.Error, droppedProfile);
+            TrimMemory();
+        }
+
         private void SpeedTimer_Tick(object? sender, EventArgs e)
         {
+            if (_isConnected && !_xrayService.IsRunning)
+            {
+                HandleConnectionDropped();
+                return;
+            }
+
             if (_cachedInterfaces == null) return;
             long r = 0, s = 0;
             foreach (var ni in _cachedInterfaces)

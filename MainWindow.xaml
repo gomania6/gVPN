@@ -1,16 +1,16 @@
 ﻿<Window x:Class="gVPN.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="gVPN" Width="420" SizeToContent="Height"
+        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+        Title="gVPN" Width="420" MinWidth="420" MaxWidth="420" SizeToContent="Height"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None" AllowsTransparency="True"
         Background="Transparent" ResizeMode="NoResize"
         Closing="Window_Closing">
-    <shell:WindowChrome.WindowChrome>
-        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="0" GlassFrameThickness="0" CornerRadius="0"/>
-    </shell:WindowChrome.WindowChrome>
     <Window.Resources>
+        <sys:String x:Key="LocLaunchApp">Запуск</sys:String>
+        <sys:String x:Key="LocDeleteTooltip">Удалить</sys:String>
+        <sys:String x:Key="LocRenameTooltip">Переименовать</sys:String>
         <Style x:Key="DarkListBoxStyle" TargetType="ListBox">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -164,8 +164,8 @@
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0">
                         <Button x:Name="BtnSettings" Content="&#xE713;" Style="{StaticResource WindowControlBtn}" Click="BtnSettings_Click" ToolTip="Настройки"/>
-                        <Button Content="&#xE921;" Style="{StaticResource WindowControlBtn}" Click="BtnMinimize_Click" ToolTip="Свернуть в трей"/>
-                        <Button Content="&#xE8BB;" Style="{StaticResource WindowCloseBtn}" Click="BtnClose_Click" ToolTip="Скрыть"/>
+                        <Button x:Name="BtnMinimize" Content="&#xE921;" Style="{StaticResource WindowControlBtn}" Click="BtnMinimize_Click" ToolTip="Свернуть в трей"/>
+                        <Button x:Name="BtnClose" Content="&#xE8BB;" Style="{StaticResource WindowCloseBtn}" Click="BtnClose_Click" ToolTip="Скрыть"/>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -174,9 +174,14 @@
             <StackPanel x:Name="PnlMainView" Grid.Row="1" Visibility="Visible">
                 <Grid Margin="18,4,18,8">
                     <TextBlock x:Name="LblAvailableServers" Text="Доступные серверы" Foreground="#A6ADC8" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    <Button x:Name="BtnToggleAddPanel" Content="+ Добавить" HorizontalAlignment="Right"
-                            Background="Transparent" Foreground="#89B4FA" BorderThickness="0"
-                            FontSize="12" FontWeight="SemiBold" Cursor="Hand" Click="BtnToggleAddPanel_Click"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button x:Name="BtnPingAll" Content="Ping" Margin="0,0,12,0"
+                                Background="Transparent" Foreground="#A6E3A1" BorderThickness="0"
+                                FontSize="12" FontWeight="SemiBold" Cursor="Hand" Click="BtnPingAll_Click"/>
+                        <Button x:Name="BtnToggleAddPanel" Content="+ Добавить"
+                                Background="Transparent" Foreground="#89B4FA" BorderThickness="0"
+                                FontSize="12" FontWeight="SemiBold" Cursor="Hand" Click="BtnToggleAddPanel_Click"/>
+                    </StackPanel>
                 </Grid>
                 <Border Background="#1E1E2E" CornerRadius="8" Margin="16,0,16,10" Padding="6" MaxHeight="220">
                     <ListBox x:Name="LstServers"
@@ -190,19 +195,46 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="{Binding Name}" Foreground="#CDD6F4"
                                                FontSize="13" FontWeight="Medium" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                    <Border Grid.Column="1" Background="#313244" CornerRadius="4" Padding="6,2" Margin="8,0,8,0" VerticalAlignment="Center">
+                                    <TextBlock Grid.Column="1" Text="{Binding LatencyText}" Foreground="{Binding LatencyColor}"
+                                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                                    <Border Grid.Column="2" Background="#313244" CornerRadius="4" Padding="6,2" Margin="8,0,6,0" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Type}" Foreground="#89B4FA" FontSize="10" FontWeight="Bold"/>
                                     </Border>
-                                    <Button Grid.Column="2" Content="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="22" Height="22"
+                                    <Button Grid.Column="3" Content="&#xE70F;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="22" Height="22"
                                             Background="Transparent" Foreground="#6C7086" BorderThickness="0" Cursor="Hand"
-                                            Click="BtnDeleteServer_Click" ToolTip="Удалить"/>
+                                            Click="BtnRenameServer_Click" ToolTip="{DynamicResource LocRenameTooltip}"/>
+                                    <Button Grid.Column="4" Content="&#xE74D;" FontFamily="Segoe MDL2 Assets" FontSize="11" Width="22" Height="22"
+                                            Background="Transparent" Foreground="#6C7086" BorderThickness="0" Cursor="Hand"
+                                            Click="BtnDeleteServer_Click" ToolTip="{DynamicResource LocDeleteTooltip}"/>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
                     </ListBox>
+                </Border>
+
+                <!-- Панель переименования -->
+                <Border x:Name="PnlRenameServer" Margin="16,0,16,12" Background="#1E1E2E" CornerRadius="8" Padding="10" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="TxtRename" Grid.Column="0" Height="30" Background="#181825" Foreground="#CDD6F4"
+                                 BorderBrush="#313244" BorderThickness="1" Padding="8,4" FontSize="12" VerticalContentAlignment="Center"
+                                 KeyDown="TxtRename_KeyDown"/>
+                        <Button x:Name="BtnSaveRename" Grid.Column="1" Content="OK" Height="30" Padding="12,0" Margin="8,0,0,0"
+                                Background="#A6E3A1" Foreground="#11111B" FontWeight="Bold" FontSize="12"
+                                BorderThickness="0" Cursor="Hand" Click="BtnSaveRename_Click"/>
+                        <Button x:Name="BtnCancelRename" Grid.Column="2" Content="✕" Height="30" Width="30" Margin="6,0,0,0"
+                                Background="#313244" Foreground="#CDD6F4" FontSize="12"
+                                BorderThickness="0" Cursor="Hand" Click="BtnCancelRename_Click"/>
+                    </Grid>
                 </Border>
 
                 <!-- Панель добавления -->
@@ -287,7 +319,7 @@
                                                     <ColumnDefinition Width="Auto"/>
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Text="{Binding}" Foreground="#CDD6F4" FontSize="11" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                                <Button Grid.Column="1" Content="Запуск" Margin="6,0,4,0" Padding="6,1"
+                                                <Button Grid.Column="1" Content="{DynamicResource LocLaunchApp}" Margin="6,0,4,0" Padding="6,1"
                                                         Background="#313244" Foreground="#A6E3A1" FontSize="10" BorderThickness="0"
                                                         Cursor="Hand" Click="BtnLaunchApp_Click"/>
                                                 <Button Grid.Column="2" Content="✕" Width="18" Height="18" Background="Transparent"
